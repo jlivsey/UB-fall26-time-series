@@ -1,0 +1,412 @@
+---
+title: "2026 Time Series"
+author: "03-regression"
+format: revealjs
+editor: source
+toc: true
+toc-depth: 1
+slide-number: true
+smaller: false
+scrollable: true 
+execute:
+  echo: true
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r, echo=FALSE}
+library(forecast)
+library(fpp3)
+library(tidyverse)
+library(tsbox)
+library(zoo)
+library(seasonal)
+library(astsa)
+```
+
+# ---- Regression Basics
+
+## Multiple Linear Regression
+
+Time series regression models postulate a linear relationship between the average level of a response (output) varaible $y_t$ and a bunch (say $p$) of predictor (input) variables $\textbf{x}_t = (x_{t,1}, \ldots, x_{t,p})$ for each time point $t$.
+
+$$y_t = \beta_0 + \beta_1 x_{t,1} + \beta_2 x_{t,2} + \cdots + \beta_k x_{t,p} + \epsilon_t$$ Simplest case is 'simple linear regression' with $p = 1$. The input variables could be simple functions of time e.g. $x_{t,1} = t$ for fitting a 'Linear Trend' or $x_{t,1} = t, x_{t,2} = t^2$ for fitting a 'Quadratic Trend' or $x_{t,1} = A\cos(\theta t + \eta)$ for a periodic mean or $x_t$ could simply be other contemporaneous time series or lags of contemporaneous time series.
+
+## Errors in the equation
+
+Key assumption about the 'error' $\epsilon_t,\, t = 1, \ldots, T.$
+
+-   Errors have mean zero; otherwise the fit/forecasts will be systematically biased.
+-   Errors are not autocorrelated; otherwise the forecasts will be inefficient, as there is more information in the data that can be exploited.
+-   Errors are unrelated to the predictor variables; otherwise there would be more information that should be included in the systematic part of the model. More generally, the input variables have to be 'exogenous', i.e. $E(\epsilon_t | x_t) = 0.$ This along with mean zero errors will mean that the imput variable is uncorrelated with the error term
+
+## Contemporaneous input time series {.smaller}
+
+@fig-Income shows the time series of quarterly percentage changes (growth rates) of real personal consumption expenditure, $y_t$, and real personal disposable income, $x_t$ for the US from 1970 Q1 to 2019 Q2.
+
+```{r}
+#| label: fig-Income
+#| fig-cap: "Percentage changes in personal consumption expenditure and personal income for the US"
+#| warning: false
+us_change |>
+  pivot_longer(c(Consumption, Income), names_to="Series") |>
+  autoplot(value) +
+  labs(y = "% change")
+```
+
+## Income versus Expenditure {.smaller}
+
+Do you see any linear relationship between $x$ and $y$?
+
+```{r}
+us_change |>
+  ggplot(aes(x = Income, y = Consumption)) +
+  labs(y = "Consumption (quarterly % change)",
+       x = "Income (quarterly % change)") +
+  geom_point() 
+```
+
+
+## Income versus Expenditure {.smaller}
+
+@fig-Scatter_Plot shows the relationship between income and expenditure.
+
+```{r}
+#| label: fig-Scatter_Plot
+#| fig-cap: "Scatterplot of quarterly changes in consumption expenditure versus quarterly changes in personal income and the fitted regression line."
+#| warning: false
+
+us_change |>
+  ggplot(aes(x = Income, y = Consumption)) +
+  labs(y = "Consumption (quarterly % change)",
+       x = "Income (quarterly % change)") +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE)
+```
+
+## Regression of Income on Expenditure
+
+The scatter plot shows a linear upward trend. A simple linear regression fit gives 
+
+$$\hat{y}_t = 0.54 + 0.27 x_t $$
+
+The fit is not very satisfactory (<span style="color:red;">how do we decide this?</span>) so need to modify the mode:  add more varaibles and/or add nonlinear terms
+
+# ---- Lagged regression
+
+## Regression with lagged varaibles {.smaller}
+
+
+\[SS Example\~1.5\] SOI and Recruitment Correlation Analysis: @fig-SOI shows monthly values of an environmental series called the Southern Oscillation Index (SOI) and associated Recruitment (number of new fish)
+
+```{r}
+#| label: fig-SOI
+#| fig-cap: "<Monthly SOI and Recruitment (estimated new fish), 1950-1987."
+#| warning: false
+
+par(mfrow = c(2,1)) # set up the graphics
+plot(soi, ylab="", xlab="", main="Southern Oscillation Index")
+plot(rec, ylab="", xlab="", main="Recruitment")
+```
+
+## Correlation Anaysis of SOI and Rec 
+
+- The ACF plot shows dependence of the current value of each series on its own lagged values
+
+```{r}
+#| output-location: slide
+  par(mfrow=c(1,2))
+  acf(soi, 48, main="Southern Oscillation Index")
+  acf(rec, 48, main="Recruitment")
+```
+
+## SOI and Rec CCF
+
+ - In time series regression we have the opportunity to add the lagged values of the predictors as possible predictors.
+- The sample cross-correlation and CCF function are defined as 
+
+$$
+\widehat{\gamma}_{xy}(h)
+=
+\frac{1}{n}\sum_{i=1}^{n-h}(x_{t+h} - \bar{x})(y_t - \bar{y})
+$$
+
+$$
+\widehat{\rho}_{xy}(h)
+= 
+\frac{\widehat{\gamma}_{xy}(h)}{\sqrt{\widehat{\gamma}_x(0)\widehat{\gamma}_y(0)}}
+$$
+
+
+## SOI and Rec CCF
+
+- The sample CCF in @fig-SOI2 ACf shows some departure from the cyclic component of each series and there is an obvious peak at $h = −6$. 
+- This result implies that SOI measured at time $t − 6$ months is associated with the Recruitment series at time $t$.
+
+```{r}
+#| label: fig-SOI2
+#| fig.cap: "The sample CCF of the two series; negative lags indicate SOI leads Recruitment"
+#| warning: false
+ccf(soi, rec, 48, main="SOI vs Recruitment", ylab="CCF")
+```
+
+## Lag plots for SOI  
+
+The following figure shows scatter plots of the SOI series with different lags of SOI 
+
+```{r}
+
+lag1.plot(soi, 12) 
+```
+
+## Lag plots for SOI and Rec 
+
+The following figure shows scatter plots of the SOI series with different lags of  Rec
+
+```{r}
+
+lag2.plot(soi, rec, 8) 
+```
+
+
+## Lagged regression for SOI on Rec{.scrollable}
+
+Consider the following lagged regression,
+$$R_t = \beta_0 + \beta_1 S_{t-6} + w_t$$
+where $R_t$ denotes Recruitment for month $t$ and $S_{t-6}$ denotes SOI six months prior.
+Assuming the $w_t$ sequence is white, the fitted model is
+$$\hat{R}_t = 65.79 - 44.28_{(2.78)}S_{t-6}$$
+
+The slope estimate is statistically significant (standard error is given in parenthesis)
+
+```{r}
+fish = ts.intersect(rec, soiL6=stats::lag(soi,-6), dframe=TRUE) 
+summary(fit1 <- lm(rec~soiL6, data=fish, na.action=NULL))
+```
+
+## Fitted model for SOI-lag6 on Rec
+
+```{r}
+plot(rec ~ soiL6, data = fish)
+abline(fit1)
+```
+
+# ---- Useful Predictor variables
+
+## Trend
+
+A linear trend can be modelled by simply using $$x_{1,t} = t$$ as a predictor,
+
+$$y_t = \beta_0 + \beta_1 t + \epsilon_t$$
+
+
+## Dummy variables
+
+- A dummy variable is also known as an “indicator variable”.
+- Example a predictor is a categorical variable taking only two values (e.g., “yes” and “no”)?
+
+    - when forecasting daily sales and you want to take account of whether the day is a public holiday or not.
+    - So the predictor takes value “yes” on a public holiday, and “no” otherwise.
+
+-  a “dummy variable” which takes value 1 corresponding to “yes” and 0 corresponding to “no”.
+
+ - A dummy variable can also be used to account for an outlier in the data.
+
+ - Rather than omit the outlier, a dummy variable removes its effect.
+
+- In this case, the dummy variable takes value 1 for that observation and 0 everywhere else.
+
+
+## Seasonal Dummy variables
+
+|          | d1, t | d2, t | d3, t | d4, t | d5, t | d6, t |
+|----------|-------|-------|-------|-------|-------|-------|
+| Monday   | 1     | 0     | 0     | 0     | 0     | 0     |
+| Tuesday  | 0     | 1     | 0     | 0     | 0     | 0     |
+| Wednesday| 0     | 0     | 1     | 0     | 0     | 0     |
+| Thursday | 0     | 0     | 0     | 1     | 0     | 0     |
+| Friday   | 0     | 0     | 0     | 0     | 1     | 0     |
+| Saturday | 0     | 0     | 0     | 0     | 0     | 1     |
+| Sunday   | 0     | 0     | 0     | 0     | 0     | 0     |
+| Monday   | 1     | 0     | 0     | 0     | 0     | 0     |
+
+## Example: Australian quarterly beer production: 
+
+```{r, echo=FALSE}
+recent_production <- aus_production |>
+  filter(year(Quarter) >= 1992)
+recent_production |>
+  autoplot(Beer) +
+  labs(y = "Megalitres",
+       title = "Australian quarterly beer production")
+```
+
+## Example: Australian quarterly beer production: 
+
+- We can model this data using a regression model with a **linear trend** and **quarterly dummy variables**,
+
+$$y_t = \beta_0 + \beta_1 t + \beta_2 d_{2,t} + \beta_3 d_{3,t} + \beta_4 d_{4,t} + \epsilon_t,$$
+
+- $d_{i,t} = 1$  if  $t$ is in quarter $i$ and 0 otherwise. 
+- The first quarter variable has been omitted, so the coefficients associated with the other quarters are measures of the difference between those quarters and the first quarter.
+
+## Example: Australian quarterly beer production: 
+
+```{r}
+fit_beer <- recent_production |>
+  model(TSLM(Beer ~ trend() + season()))
+report(fit_beer)
+```
+
+- There is an average downward trend of -0.34 megalitres per quarter. 
+- On average, the second quarter has production of 34.7 megalitres lower than the first quarter
+- the third quarter has production of 17.8 megalitres lower than the first quarter
+- the fourth quarter has production of 72.8 megalitres higher than the first quarter.
+
+## Example: Australian quarterly beer production: 
+
+- Plotting fitted values
+
+```{r}
+#| output-location: slide
+augment(fit_beer) |>
+  ggplot(aes(x = Quarter)) +
+  geom_line(aes(y = Beer, colour = "Data")) +
+  geom_line(aes(y = .fitted, colour = "Fitted")) +
+  scale_colour_manual(
+    values = c(Data = "black", Fitted = "#D55E00")
+  ) +
+  labs(y = "Megalitres",
+       title = "Australian quarterly beer production") +
+  guides(colour = guide_legend(title = "Series"))
+```
+
+## Example: Australian quarterly beer production: 
+
+- Plotting actual vs fitted values
+
+```{r}
+#| output-location: slide
+augment(fit_beer) |>
+  ggplot(aes(x = Beer, y = .fitted,
+             colour = factor(quarter(Quarter)))) +
+  geom_point() +
+  labs(y = "Fitted", x = "Actual values",
+       title = "Australian quarterly beer production") +
+  geom_abline(intercept = 0, slope = 1) +
+  guides(colour = guide_legend(title = "Quarter"))
+```
+
+
+## Intervention variables
+
+- Often necessary to model interventions that may have affected the variable to be forecast. 
+    - For example, competitor activity, advertising expenditure, industrial action
+
+
+## Trading Day 
+
+- $x_1$ = number of Mondays in month;
+- $x_2$ = number of Tuesdays in month;
+- $\vdots$
+- $x_7$ = number of Sundays in month.
+
+
+## Distributed lags
+
+- Often useful to include advertising expenditure as a predictor. 
+- The effect of advertising can last beyond the actual campaign
+- Need to include lagged values of advertising expenditure
+
+- $x_1$ = advertising for previous month;
+- $x_2$ = advertising for two months previously;
+- $\vdots$
+- $x_m$ = advertising for $m$ months previously.
+
+
+## Holiday 
+
+Some holidays can move around in the calendar
+
+- Easter
+- Chinese New Year
+- Ramadan
+
+## Fourier series
+
+- Alternative to using seasonal dummy variables
+- Useful for long seasonal periods
+
+If  $m$  is the seasonal period, then the first few Fourier terms are given by:
+
+:::: {.columns}
+
+::: {.column width="50%"}
+- $x_{1,t} = \sin \left( \frac{2 \pi t}{m} \right)$
+- $x_{2,t} = \cos \left( \frac{2 \pi t}{m} \right)$
+- $x_{3,t} = \sin \left( \frac{4 \pi t}{m} \right)$
+:::
+
+::: {.column width="50%"}
+- $x_{4,t} = \cos \left( \frac{4 \pi t}{m} \right)$
+- $x_{5,t} = \sin \left( \frac{6 \pi t}{m} \right)$
+- $x_{6,t} = \cos \left( \frac{6 \pi t}{m} \right)$
+:::
+
+::::
+
+
+# ----- Nonlinear regression
+
+## Nonlinear relation
+
+```{r}
+ dummy = ifelse(soi<0, 0, 1)
+  fishl6 = ts.intersect(rec, soiL_l6=stats::lag(soi,-6), dummy6=stats::lag(dummy,-6), dframe=TRUE)
+  attach(fishl6)
+plot(soiL_l6, rec)
+lines(lowess(soiL_l6, rec), col=4, lwd=2)
+```
+
+
+
+## Need for nonlinear regression {.scro}
+
+The relationship is nonlinear and different when SOI is positive or negative. In this case, we may consider adding a dummy variable to account for this change. In particular, we fit the model:
+$$
+R_t = \beta_0 + \beta_1 S_{t-6} + \beta_2 D_{t-6} + \beta_3 D_{t-6} S_{t-6} + w_t
+$$
+where $D_t$ is a dummy variable that is 0 if $S_t < 0$ and 1 otherwise. This means that:
+$$
+R_t = \begin{cases} \beta_0 + \beta_1 S_{t-6} + w_t & \text{if } S_{t-6} < 0, \\ (\beta_0+\beta_2) + (\beta_1+\beta_3)S_{t-6} + w_t & \text{if } S_{t-6} \geq 0. \end{cases}$$
+
+
+## Lowess fit of SOI versus lagged Rec {.scrollable}
+
+
+```{r}
+ dummy = ifelse(soi<0, 0, 1)
+  fish = ts.intersect(rec, soiL6=stats::lag(soi,-6), dL6=stats::lag(dummy,-6), dframe=TRUE)
+    summary(fit <- lm(rec~ soiL6*dL6, data=fish, na.action=NULL))
+```
+
+```{r}
+attach(fish)
+plot(soiL6, rec)
+lines(lowess(soiL6, rec), col=4, lwd=2) 
+points(soiL6, stats::fitted(fit), pch='+', col=2) 
+plot(resid(fit)) # not shown ... acf(resid(fit)) # ... but obviously not noise
+```
+
+## Nonlinear Models
+
+More generally the relationship between the input and out time series could be any nonlinear function, parametric as well as non-parametric and the input can include the current value and/or lagged valued of the input series. 
+
+$$ y_t = g(x_t, x_{t-1}, \ldots, x_{t-H}, \theta) + \epsilon_t $$
+
+or 
+
+$$ y_t = g(x_t, x_{t-1}, \ldots, x_{t-H}) + \epsilon_t $$
+
+The errors are usually taken to be additive (adding to the systematic part). The function $g$ could be any function but usually some features are important, e.g. smooth function or piecewise smooth and simple function.
+
