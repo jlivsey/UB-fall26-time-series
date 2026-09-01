@@ -1,7 +1,7 @@
 # Homework #0
 
 Please complete the following and upload **reproducible code** at  
-[Github Hw0](https://github.com/jlivsey/UB-fall26-time-series).
+[Github Hw0 submissions](https://github.com/jlivsey/UB-fall26-time-series/tree/main/hw/hw0/submissions).
 
 Your code must be **reproducible**, and the results must be **visible without downloading or running anything**. The easiest way to do this is with the [`reprex`](https://reprex.tidyverse.org/) R package.
 
