@@ -666,7 +666,7 @@ Check if the following processes are causal, invertible, and identifiable:
 
 1.  $X_t = 0.4\sum_{j=1}^3 X_{t-j} + Z_t$
 2.  $X_t = 0.7X_{t-1} + Z_t + 0.6Z_{t-1} - 0.8Z_{t-2}$
-3.  $ X_t = X_{t-1} - 0.24X_{t-2} + Z_{t-1} - 0.4Z_{t-1}$
+3.  $X_t = X_{t-1} - 0.24X_{t-2} + Z_{t-1} - 0.4Z_{t-1}$
 4.  $X_t = X_{t -12} + Z_{t} - Z_{t-1}$
 
 ## Autocorrelation and Partial Autocorrelation
