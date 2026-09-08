@@ -14,9 +14,9 @@ Your code must be **reproducible**, and the results must be **visible without do
    * Lead and lag relationships
    * Trend and seasonality
 
-1. Use a **regARIMA** model to forecast ICNSA for the same week.
+1. Use an **ARIMA** model to forecast ICNSA for the same week.
 
-1. Use empirical data analysis or numerical calculations to decide on the **stochastic structure** to use for your regARIMA model. You may use the same covariate as in Question 3 or choose a different one.
+1. Use empirical data analysis or numerical calculations to decide on the **stochastic structure** to use for your regARIMA model. 
 
    * Think about how including the same variable versus a different variable is **affected** by having ARIMA errors versus uncorrelated errors.
 
