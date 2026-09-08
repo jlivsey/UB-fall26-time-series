@@ -16,8 +16,6 @@ Your code must be **reproducible**, and the results must be **visible without do
 
 1. Use an **ARIMA** model to forecast ICNSA for the same week.
 
-1. Use empirical data analysis or numerical calculations to decide on the **stochastic structure** to use for your regARIMA model. 
-
-   * Think about how including the same variable versus a different variable is **affected** by having ARIMA errors versus uncorrelated errors.
-
+1. Use empirical data analysis or numerical calculations to decide on the **stochastic structure** to use for your ARIMA model.
+   
 1. Make sure your **two forecast estimates are the last outputs of your code**.
