@@ -1,0 +1,638 @@
+---
+title: "Homework 1 Solution: Forecasting Initial Claims (ICNSA)"
+subtitle: "UB Time Series -- Fall 2026"
+author: "Jim Livsey"
+date: today
+format:
+  html:
+    embed-resources: true
+    toc: true
+    toc-depth: 3
+    code-fold: false
+    fig-width: 8
+    fig-height: 4.5
+    theme: cosmo
+  gfm:
+    toc: true
+execute:
+  echo: true
+  warning: false
+  message: false
+  cache: true
+---
+
+## Overview
+
+This document works through Homework 1 (see `hw/hw1/hw1.md`):
+
+1. Load the most current **Initial Claims (ICNSA)** series (not seasonally adjusted).
+2. Choose and load a related covariate series.
+3. Build a **regression-based** forecast of ICNSA for the week ending **September 5, 2026**.
+4. Build an **ARIMA** forecast for the same week, using a seasonal period of **52** weeks.
+5. Use empirical analysis (ACF/PACF, unit-root tests, information criteria, residual
+   diagnostics) to choose the ARIMA model's stochastic structure, following the classic
+   **Box--Jenkins** identify -> estimate -> diagnose cycle.
+6. Report both forecasts as the final two outputs.
+
+At every step the code is accompanied by a discussion of *why* a particular choice was
+made, not just *what* was done, that reasoning is the actual point of the exercise.
+
+```{r}
+#| label: setup
+library(readr)
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(forecast)
+library(tseries)
+library(scales)
+
+theme_set(theme_minimal(base_size = 11))
+```
+
+## Step 1: Load the most current ICNSA data
+
+FRED's `ICNSA` series ("Initial Claims", not seasonally adjusted, weekly, ending
+Saturday) 
+
+```r
+fred_url <- "https://fred.stlouisfed.org/graph/fredgraph.csv?id=ICNSA"
+icnsa_raw <- read.csv(fred_url)
+```
+
+For reproducability the data is stored in `data/ICNSA.csv`.
+FRED revises NSA claims data
+  occasionally and the series grows every week, so re-downloading later would silently
+  change the training data and the reported forecasts would no longer match this
+  write-up. 
+
+```{r}
+#| label: load-icnsa
+icnsa <- read_csv("data/ICNSA.csv", show_col_types = FALSE) |>
+  rename(date = DATE, icnsa = VALUE) |>
+  arrange(date)
+
+cat("ICNSA range:", format(min(icnsa$date)), "to", format(max(icnsa$date)),
+    "(", nrow(icnsa), "weekly observations )\n")
+tail(icnsa, 5)
+```
+
+```{r}
+#| label: fig-icnsa-full
+#| fig-cap: "Initial Claims (ICNSA), full history"
+ggplot(icnsa, aes(date, icnsa)) +
+  geom_line(linewidth = 0.3) +
+  scale_y_continuous(labels = label_comma()) +
+  labs(x = NULL, y = "Initial claims (NSA)",
+       title = "ICNSA, 1967-present")
+```
+
+Two features of the full history matter for every modeling choice that follows:
+
+* **Strong, stable annual seasonality** superimposed on a much slower-moving level --
+  claims spike every December/January (holiday layoffs, seasonal hiring cycles) and
+  trough in the spring/summer.
+* **One enormous, short-lived anomaly**: the March-June 2020 COVID-19 shock, where
+  weekly claims jumped from a normal range of roughly 200,000-400,000 to over
+  **6.16 million** in a single week (2020-04-04) before decaying back down over about a
+  year. This single event is orders of magnitude larger than any ordinary business-cycle
+  fluctuation in the other 59 years of data, and if left untreated it will dominate
+  variance estimates, unit-root tests, and autocorrelation estimates for *any* model fit
+  to the raw series. It has to be dealt with explicitly rather than ignored -- see below.
+
+### Choosing a modeling window
+
+Rather than using the full 1967-2026 history, the regression and ARIMA models below are
+both fit on data from **2010-01-02 onward**. The reasoning:
+
+* The UI claims system, benefit rules, and the structure of the labor market itself have
+  changed enough since the 1970s that pooling 59 years of data would mix several
+  different data-generating regimes -- not a good idea for a single seasonal ARIMA
+  model.
+* Sixteen-plus years (869 weekly observations) is still far more than needed to
+  estimate a seasonal model with period 52 reliably (a common rule of thumb is at least
+  4-5 full seasonal cycles; this window has more than 16).
+* It comfortably includes a full business cycle (the 2020 COVID recession and
+  recovery), which is useful for the model to have seen, *provided* that episode is
+  explicitly flagged rather than treated as ordinary noise.
+
+```{r}
+#| label: window
+win_start   <- as.Date("2010-01-02")
+target_date <- as.Date("2026-09-05")   # week we are forecasting
+
+icnsa_win <- icnsa |> filter(date >= win_start, date < target_date)
+cat("Modeling window:", format(min(icnsa_win$date)), "to", format(max(icnsa_win$date)),
+    "(", nrow(icnsa_win), "observations )\n")
+```
+
+### Handling the COVID-19 anomaly
+
+Because the 2020 shock is so extreme (and known, dated, and one-time), the cleanest fix
+is an explicit **intervention dummy** rather than trying to make a purely stochastic
+model absorb it. The window below was chosen empirically by looking at which weeks
+exceed the highest *ordinary* seasonal peak seen anywhere else in the post-2010 window
+(about 900,000, the typical January maximum):
+
+```{r}
+#| label: covid-window
+icnsa_win |> filter(icnsa > 900000) |> select(date, icnsa) |> as.data.frame()
+```
+
+Claims first jump above that threshold on 2020-03-21 and the last observation still
+visibly elevated above the normal seasonal envelope is in mid-February 2021. To give a
+little buffer on both ends, the intervention window is set to **2020-03-14 through
+2021-03-31**, encoded as a single 0/1 dummy variable used as a regressor in both the
+regression model and (as `xreg`) in the ARIMA model below. A single step dummy is a
+simplification -- the true shape is a sharp spike followed by a decay, not a clean
+rectangle -- but it removes the overwhelming majority of the distortion with one
+parameter, which is the right amount of complexity for this assignment; the residual
+diagnostics later on show exactly where this simplification leaves its mark.
+
+```{r}
+#| label: covid-dummy
+icnsa_win <- icnsa_win |>
+  mutate(covid = as.integer(date >= as.Date("2020-03-14") & date <= as.Date("2021-03-31")))
+```
+
+## Step 2: A covariate for ICNSA
+
+**Continued Claims (Insured Unemployment)**, FRED series `CCNSA`, is the natural choice
+of covariate:
+
+* It is published in the *same* weekly Unemployment Insurance Claims release as ICNSA,
+  by the same source, on the same NSA basis -- so there is no unit- or
+  methodology-mismatch to worry about.
+* Economically, continued claims are mechanically related to initial claims: people who
+  file new (initial) claims and remain unemployed show up as continued claims in
+  subsequent weeks, so the two series should be strongly cross-correlated.
+* Practically, it is genuinely useful as a *predictor* rather than just a correlated
+  series, because of a real-time data-availability quirk described next.
+
+```{r}
+#| label: load-ccnsa
+ccnsa <- read_csv("data/CCNSA.csv", show_col_types = FALSE) |>
+  rename(date = DATE, ccnsa = VALUE) |>
+  arrange(date)
+
+cat("CCNSA range:", format(min(ccnsa$date)), "to", format(max(ccnsa$date)),
+    "(", nrow(ccnsa), "weekly observations )\n")
+tail(ccnsa, 3)
+```
+
+Notice that the most recent CCNSA observation is for the week ending **2026-08-22**,
+one week *behind* the most recent ICNSA observation (2026-08-29). This is not a data
+error -- continued claims for a given week cannot be finalized until people have had a
+chance to *continue* claiming into the following week, so CCNSA is always released one
+week later in "event time" than ICNSA. That has a direct consequence for forecasting:
+by the time we stand at 2026-09-05 and want to forecast, the newest CCNSA value we could
+actually have in hand corresponds to the week ending 2026-08-22 -- two weeks before our
+target date, not one.
+
+### Choosing the lag empirically
+
+To decide *how* to use CCNSA rather than just *whether* to, look at the
+cross-correlation function between weekly changes (first differences of the logs, to
+remove the shared trend/level and put both series on a comparable multiplicative
+scale) in the two series:
+
+```{r}
+#| label: fig-ccf
+#| fig-cap: "CCF between weekly log-changes in CCNSA and ICNSA"
+cc_df <- icnsa_win |>
+  left_join(ccnsa, by = "date") |>
+  arrange(date) |>
+  mutate(dlogI = c(NA, diff(log(icnsa))),
+         dlogC = c(NA, diff(log(ccnsa)))) |>
+  filter(!is.na(dlogI), !is.na(dlogC))
+
+ccf_obj <- ccf(cc_df$dlogC, cc_df$dlogI, lag.max = 6, plot = TRUE,
+               main = "d(log CCNSA) vs d(log ICNSA)")
+data.frame(lag = ccf_obj$lag, correlation = round(ccf_obj$acf, 3))
+```
+
+Reading this CCF (R's convention: the value at `lag = k` is the correlation between
+`CCNSA` shifted forward by `k` weeks and contemporaneous `ICNSA`):
+
+* The strongest correlation is at **lag +1** (about 0.52): *this* week's initial claims
+  changes predict *next* week's continued-claims changes -- which makes complete sense
+  causally (today's new filers become next week's continuers) but is useless for
+  forecasting ICNSA, since it runs in the wrong direction.
+* Among the lags that actually run the *useful* direction (CCNSA change leading ICNSA
+  change), the strongest is **lag -1** (about 0.37): last week's CCNSA change helps
+  predict this week's ICNSA change. Unfortunately, as established above, CCNSA at
+  `lag -1` relative to our target date (2026-09-05) would be the week ending 2026-08-29
+  -- which is **not yet published**.
+* The strongest correlation at a lag that is *actually available in real time* given
+  the one-week publication delay is **lag -2** (about -0.22): a smaller, negative, but
+  still non-trivial relationship.
+
+So there is a real tension here between the statistically strongest lag relationship
+and the one that is operationally usable -- a distinction that matters a lot in
+real-time forecasting and is worth being explicit about rather than silently picking
+whichever lag happens to have the best in-sample fit. The regression below uses
+**CCNSA lagged 2 weeks** because that is the information actually in hand on the
+forecast date; the negative sign that shows up in the fitted model is a genuine, if
+modest, empirical relationship in this window, not a sign error.
+
+```{r}
+#| label: lag-covariate
+icnsa_win <- icnsa_win |>
+  left_join(ccnsa |> rename(ccnsa_val = ccnsa), by = "date") |>
+  arrange(date) |>
+  mutate(logICNSA = log(icnsa),
+         logCCNSA_lag2 = lag(log(ccnsa_val), 2))
+```
+
+## Step 3: Regression-based forecast
+
+### Model specification
+
+Three features of ICNSA drive the choice of regression specification:
+
+* **Multiplicative variation.** The size of both the trend and the seasonal swings
+  scales with the level of claims (seasonal troughs and peaks are much bigger in
+  absolute terms when the base level is high). Modeling `log(ICNSA)` rather than
+  `ICNSA` turns this multiplicative structure into an additive one, which linear
+  regression handles far better and also guarantees back-transformed forecasts are
+  positive.
+* **A slow, roughly linear drift** in the log level over the window, captured with a
+  simple linear time trend `t` (in weeks since the start of the window).
+* **Annual seasonality whose period does not divide evenly into the data.** A calendar
+  year is about 365.25/7 = 52.18 weeks, not an integer, so `factor(week-of-year)`
+  dummies do not stay aligned with the calendar over 16+ years (the misalignment
+  compounds by roughly a week every six years). The standard regression-based fix is a
+  small number of Fourier (harmonic) pairs at the true period `m = 365.25/7`, which
+  handles the non-integer period exactly and cleanly. Three harmonic pairs (`K = 3`)
+  captures the main annual shape (a strong first harmonic plus corrections) without
+  overfitting high-frequency noise.
+
+Putting these together, plus the COVID dummy and the lag-2 CCNSA covariate from Step 2:
+
+$$
+\log(\text{ICNSA}_t) = \beta_0 + \beta_1 t + \beta_2\,\text{covid}_t +
+\beta_3 \log(\text{CCNSA}_{t-2}) +
+\sum_{k=1}^{3}\Big[a_k \sin\Big(\tfrac{2\pi k t}{m}\Big) + b_k \cos\Big(\tfrac{2\pi k t}{m}\Big)\Big] + \varepsilon_t,
+\qquad m = \tfrac{365.25}{7}
+$$
+
+```{r}
+#| label: fit-regression
+reg_data <- icnsa_win |> filter(!is.na(logCCNSA_lag2))
+t0 <- min(reg_data$date)
+reg_data <- reg_data |> mutate(t = as.numeric(date - t0) / 7)
+
+m <- 365.25 / 7
+K <- 3
+make_fourier <- function(t, K, m) {
+  X <- matrix(NA_real_, nrow = length(t), ncol = 2 * K)
+  for (k in seq_len(K)) {
+    X[, 2 * k - 1] <- sin(2 * pi * k * t / m)
+    X[, 2 * k]     <- cos(2 * pi * k * t / m)
+  }
+  colnames(X) <- paste0(rep(c("sin", "cos"), K), rep(seq_len(K), each = 2))
+  as.data.frame(X)
+}
+
+fourier_train <- make_fourier(reg_data$t, K, m)
+model_df <- cbind(logICNSA = reg_data$logICNSA, t = reg_data$t,
+                   covid = reg_data$covid, logCCNSA_lag2 = reg_data$logCCNSA_lag2,
+                   fourier_train)
+
+reg_fit <- lm(logICNSA ~ ., data = model_df)
+summary(reg_fit)
+```
+
+Every term is highly significant, the COVID dummy and the CCNSA lag both have the
+expected sign, and the fit ($R^2 \approx 0.82$) is a large improvement over a
+trend + seasonality model with no covariate (adjusted $R^2 \approx 0.16$ for a
+harmonic-only model on this series, using the same technique as the Homework 0
+solution) -- direct evidence that continued claims carry real, useful information
+about initial claims beyond just the shared trend and seasonal cycle.
+
+### Regression residual diagnostics
+
+```{r}
+#| label: fig-reg-resid
+#| fig-cap: "Regression residuals over time"
+plot(reg_data$date, residuals(reg_fit), type = "l",
+     xlab = NULL, ylab = "residual (log scale)",
+     main = "OLS regression residuals")
+abline(h = 0, col = "grey50", lty = 2)
+```
+
+```{r}
+#| label: reg-ljungbox
+Box.test(residuals(reg_fit), lag = 52, type = "Ljung-Box", fitdf = length(coef(reg_fit)) - 1)
+```
+
+The Ljung-Box test overwhelmingly rejects the null of no residual autocorrelation. This
+is expected and important: ordinary least squares only models the *mean* structure
+(trend, seasonality, covariate effect); it says nothing about the fact that a week with
+unusually high claims tends to be followed by other weeks with unusually high claims.
+That leftover serial dependence is exactly what an ARIMA error structure is designed to
+capture -- which motivates Step 4.
+
+### Regression forecast
+
+```{r}
+#| label: regression-forecast
+t_target <- as.numeric(target_date - t0) / 7
+last_logCCNSA <- log(ccnsa$ccnsa[ccnsa$date == target_date - 14])
+fourier_target <- make_fourier(t_target, K, m)
+newdata <- cbind(t = t_target, covid = 0, logCCNSA_lag2 = last_logCCNSA, fourier_target)
+
+reg_pred_log <- predict(reg_fit, newdata = newdata, interval = "prediction", level = 0.95)
+reg_pred <- exp(reg_pred_log)
+reg_forecast <- unname(reg_pred[1, "fit"])
+
+cat(sprintf("Regression forecast for the week ending %s: %s  (95%% PI: %s - %s)\n",
+            format(target_date, "%B %d, %Y"),
+            comma(round(reg_forecast)),
+            comma(round(reg_pred[1, "lwr"])),
+            comma(round(reg_pred[1, "upr"]))))
+```
+
+## Step 4-5: ARIMA forecast via the Box-Jenkins methodology
+
+The homework asks for a seasonal ARIMA fit using **frequency 52** for the seasonal
+component, and for the stochastic structure to be chosen empirically. The classic
+Box-Jenkins recipe -- **identify, estimate, diagnose (repeat as needed)** -- is followed
+explicitly below, working with the same log-transformed, COVID-adjusted series used
+above (the log transform is retained for the same variance-stabilization reason as in
+Step 3; the COVID period is handled the same way, as a regressor rather than by
+deleting data, so that the seasonal ARIMA structure is estimated from the whole
+16-year window).
+
+```{r}
+#| label: arima-setup
+# The ARIMA step is univariate (no covariate needed), so it uses the full
+# 2010-2026 ICNSA window directly rather than the 2-observations-shorter
+# data frame used for the regression (which loses its first two rows to
+# the lag-2 CCNSA covariate).
+y <- ts(icnsa_win$logICNSA, frequency = 52, start = c(2010, 1))
+xreg_covid <- matrix(icnsa_win$covid, ncol = 1, dimnames = list(NULL, "covid"))
+```
+
+A note on `frequency = 52`: a calendar year is actually about 52.18 weeks, so a fixed
+52-week seasonal period is a (standard, necessary) approximation -- `ts()` requires an
+integer frequency, and 52 is the conventional choice for weekly economic data. The
+practical consequence is that the model's notion of "week 1 of the seasonal cycle"
+slowly drifts relative to the actual calendar (and relative to moving holidays like
+Thanksgiving) by about a week every six years. That drift shows up later as a small,
+structured pattern in the residuals -- worth flagging now, revisited in the diagnostics.
+
+### Identification
+
+**(a) Is the series stationary in levels?** Two classroom-standard tests disagree,
+which is itself informative:
+
+```{r}
+#| label: unit-root-level
+adf.test(y)
+kpss.test(y, null = "Level")
+```
+
+The ADF test (null = unit root) rejects at the 5% level, suggesting stationarity, while
+the KPSS test (null = stationarity) also rejects, suggesting *non*-stationarity. This
+contradiction is a well-known symptom of a series with strong seasonal structure: both
+tests are built around a non-seasonal alternative and can behave erratically when a
+large seasonal component is present. Formal automated seasonal-differencing tests give
+a similarly unhelpful signal:
+
+```{r}
+#| label: nsdiffs
+nsdiffs(y)
+ndiffs(y)
+```
+
+`nsdiffs()` reports that *no* seasonal differencing is needed, which conflicts with
+the very obvious seasonal cycle in @fig-icnsa-full. Rather than trust an automated test
+in a situation where it is known to be unreliable, the classic Box-Jenkins approach --
+look directly at the ACF -- is more trustworthy here.
+
+**(b) Visual identification via the ACF at seasonal lags.** First, the COVID dummy is
+regressed out (on its own) purely to get a cleaner look at the underlying seasonal
+autocorrelation without the pandemic spike contaminating it:
+
+```{r}
+#| label: acf-seasonal-lags
+r <- residuals(lm(logICNSA ~ covid, data = icnsa_win))
+r_ts <- ts(r, frequency = 52)
+
+acf_r <- Acf(r_ts, lag.max = 4 * 52, plot = FALSE)
+seas_lags <- seq(52, 4 * 52, by = 52)
+data.frame(lag = seas_lags, acf = round(acf_r$acf[seas_lags + 1], 3))
+```
+
+The autocorrelation at exact multiples of 52 weeks decays slowly (0.58, 0.34, 0.25,
+0.16 at 1, 2, 3, 4 years) rather than cutting off -- the textbook signature of a
+**seasonal unit root**, i.e. evidence *for* seasonal differencing (`D = 1`) even though
+the automated `nsdiffs()` test above said otherwise.
+
+```{r}
+#| label: seasonal-diff-check
+r_sd <- diff(r_ts, lag = 52)
+adf.test(r_sd)
+Acf(r_sd, lag.max = 10, plot = FALSE)$acf[1:6]
+```
+
+After one seasonal difference, the ADF test rejects a unit root -- but the ACF at
+short lags (0.78, 0.65, 0.60, 0.54, ...) still decays very slowly, which is the
+signature of a remaining **non-seasonal** unit root, so a regular first difference is
+also warranted:
+
+```{r}
+#| label: regular-diff-check
+r_sd_d <- diff(r_sd, lag = 1)
+adf.test(r_sd_d)
+cat("Variance before regular differencing:", round(var(r_sd), 5),
+    " after:", round(var(r_sd_d), 5), "\n")
+```
+
+The ADF test now rejects strongly, and critically the variance *drops* (0.075 to
+0.034) rather than increasing after differencing -- if the series had already been
+stationary, differencing again would have inflated the variance (over-differencing),
+so this drop confirms the extra difference is warranted rather than harmful. This
+gives `d = 1`, `D = 1` at `s = 52` -- so the working series for identifying the ARMA
+orders is $w_t = (1-B)(1-B^{52})r_t$.
+
+**(c) Identifying `(p,q)` and `(P,Q)` from the ACF/PACF of `w_t`.**
+
+```{r}
+#| label: fig-acf-pacf-final
+#| fig-cap: "ACF and PACF of the fully differenced, COVID-adjusted series"
+par(mfrow = c(2, 1))
+Acf(r_sd_d, lag.max = 60, main = "ACF")
+Pacf(r_sd_d, lag.max = 60, main = "PACF")
+```
+
+Two patterns stand out, each read the classic Box-Jenkins way:
+
+* **Non-seasonal lags (1-2):** both the ACF and PACF have significant spikes at lags 1
+  and 2 and are essentially inside the confidence band from lag 3 onward. A pattern
+  that "cuts off" in *both* ACF and PACF after a couple of lags, rather than one of
+  them decaying smoothly, points toward a low-order mixed `ARMA(p,q)` for the
+  non-seasonal part rather than a pure AR or pure MA -- so the search below considers
+  small combinations of `p` and `q` up to 2 instead of committing to one shape a priori.
+* **Seasonal lag (52):** there is one large, isolated spike at exactly lag 52 in both
+  the ACF (about -0.43) and PACF (about -0.45), with essentially nothing at the
+  neighboring lags (48-51, 53-56). A single seasonal spike that then vanishes is the
+  textbook signature of a seasonal `MA(1)` (or, less commonly, `AR(1)`) at `s = 52` --
+  so the seasonal order search below focuses on `P, Q \in \{0, 1\}`.
+
+### Estimation: comparing candidate models
+
+Rather than an exhaustive grid search over every combination (computationally wasteful
+and not how Box-Jenkins is meant to be practiced), the identification step above
+narrows the field to a small number of substantively motivated candidates, each fit
+with the COVID dummy as an exogenous regressor (`xreg`) so the intervention does not
+contaminate the ARMA parameter estimates:
+
+```{r}
+#| label: candidate-models
+#| cache: true
+candidates <- list(
+  c(1, 1, 1,  0, 1, 1),
+  c(0, 1, 2,  0, 1, 1),
+  c(2, 1, 0,  0, 1, 1),
+  c(0, 1, 1,  1, 1, 0),
+  c(2, 1, 1,  0, 1, 1),
+  c(1, 1, 2,  0, 1, 1)
+)
+
+fit_one <- function(cc) {
+  tryCatch(
+    Arima(y, order = c(cc[1], cc[2], cc[3]),
+          seasonal = list(order = c(cc[4], cc[5], cc[6]), period = 52),
+          xreg = xreg_covid, method = "CSS-ML"),
+    error = function(e) NULL)
+}
+
+fits <- lapply(candidates, fit_one)
+keep <- !sapply(fits, is.null)
+candidates <- candidates[keep]
+fits <- fits[keep]
+
+candidate_table <- do.call(rbind, Map(function(cc, fit) {
+  lb <- Box.test(residuals(fit), lag = 104,
+                  fitdf = sum(cc[c(1, 3, 4, 6)]), type = "Ljung-Box")
+  data.frame(
+    model = sprintf("(%d,%d,%d)(%d,%d,%d)[52]", cc[1], cc[2], cc[3], cc[4], cc[5], cc[6]),
+    AICc = round(fit$aicc, 2),
+    BIC  = round(fit$bic, 2),
+    ljung_box_p = round(lb$p.value, 3)
+  )
+}, candidates, fits))
+
+candidate_table
+```
+
+`(1,1,2)(0,1,1)[52]` has the lowest AICc *and* the largest Ljung-Box p-value (i.e. the
+residuals look most like white noise) among the candidates considered, and its
+coefficients are all comfortably significant:
+
+```{r}
+#| label: final-model
+best_fit <- fits[[which.min(sapply(fits, function(f) f$aicc))]]
+best_fit
+```
+
+### Diagnostic checking
+
+```{r}
+#| label: fig-residual-diagnostics
+#| fig-cap: "Residual diagnostics for the selected SARIMA model"
+checkresiduals(best_fit)
+```
+
+```{r}
+#| label: ljung-box-final
+Box.test(residuals(best_fit), lag = 104, fitdf = 4, type = "Ljung-Box")
+shapiro.test(as.numeric(residuals(best_fit)))
+```
+
+Two things to take away:
+
+* **Autocorrelation: clean.** The Ljung-Box test does not reject at conventional
+  levels, and the residual ACF in the plot above has no meaningful spikes -- the
+  `(1,1,2)(0,1,1)[52]` structure has captured essentially all of the linear serial
+  dependence in the series, which is the primary thing a Box-Jenkins diagnostic check
+  is trying to establish.
+* **Normality: fails, for an explainable reason.** The Shapiro-Wilk test strongly
+  rejects normality, and the residual histogram has heavy tails. Looking at the largest
+  residuals by date:
+
+```{r}
+#| label: residual-outliers
+icnsa_win |>
+  mutate(resid = as.numeric(residuals(best_fit))) |>
+  arrange(desc(abs(resid))) |>
+  select(date, icnsa, resid) |>
+  head(8) |>
+  as.data.frame()
+```
+
+  the single largest residual is the very first week of the COVID spike
+  (2020-03-21) -- a single step dummy cannot fully capture a shock that actually
+  arrives as a sharp spike-and-decay rather than a clean rectangle, so a little of that
+  shape leaks into the residuals right at the onset and offset of the intervention
+  window. Beyond that, several of the next-largest residuals recur every
+  **late November / early December** (2013, 2019, 2024) -- almost certainly a
+  **Thanksgiving effect**: the holiday moves around within the calendar month from year
+  to year, so its impact does not land on the same "week of the 52-week seasonal cycle"
+  every year, which is exactly the `frequency = 52` approximation flagged earlier. Both
+  effects are known, dated, and small relative to the overall signal; they do not
+  indicate that the model has missed real linear dependence (Ljung-Box is clean), only
+  that its errors are not perfectly Gaussian -- so prediction intervals below should be
+  read as reasonable but somewhat optimistic in the tails.
+
+### ARIMA forecast
+
+```{r}
+#| label: arima-forecast
+arima_fc <- forecast(best_fit, h = 1,
+                      xreg = matrix(0, nrow = 1, ncol = 1, dimnames = list(NULL, "covid")),
+                      level = 95)
+arima_forecast <- exp(as.numeric(arima_fc$mean))
+arima_lo <- exp(arima_fc$lower[1, 1])
+arima_hi <- exp(arima_fc$upper[1, 1])
+
+cat(sprintf("SARIMA(1,1,2)(0,1,1)[52] forecast for the week ending %s: %s  (95%% PI: %s - %s)\n",
+            format(target_date, "%B %d, %Y"),
+            comma(round(arima_forecast)), comma(round(arima_lo)), comma(round(arima_hi))))
+```
+
+## Step 6: Final forecasts
+
+Both approaches -- a harmonic regression with a lagged continued-claims covariate, and
+a seasonal ARIMA model identified through the classic Box-Jenkins cycle -- are fit
+independently and land within about 4% of each other, which is a reassuring
+cross-check given how differently the two methods handle serial dependence: the
+regression relies on an external covariate and a smooth deterministic seasonal shape,
+while the ARIMA model relies entirely on the series' own past values and errors, with
+seasonality captured stochastically.
+
+```{r}
+#| label: final-summary
+final_table <- data.frame(
+  Method = c("Regression (trend + Fourier + COVID dummy + CCNSA lag-2)",
+             "SARIMA(1,1,2)(0,1,1)[52] with COVID xreg"),
+  Forecast = comma(round(c(reg_forecast, arima_forecast))),
+  `95% PI` = c(paste0(comma(round(reg_pred[1, "lwr"])), " - ", comma(round(reg_pred[1, "upr"]))),
+               paste0(comma(round(arima_lo)), " - ", comma(round(arima_hi)))),
+  check.names = FALSE
+)
+knitr::kable(final_table,
+             caption = paste("ICNSA forecasts for the week ending", format(target_date, "%B %d, %Y")))
+```
+
+```{r}
+#| label: forecast-1-regression
+reg_forecast
+```
+
+```{r}
+#| label: forecast-2-arima
+arima_forecast
+```
