@@ -1,0 +1,263 @@
+---
+title: "HW 1 - 9/10"
+format: revealjs
+editor: source
+toc: true
+toc-depth: 1
+slide-number: true
+smaller: false
+scrollable: true 
+execute:
+  echo: true
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r, echo=FALSE}
+library(forecast)
+library(fpp3)
+library(tidyverse)
+library(tsbox)
+library(zoo)
+library(seasonal)
+library(astsa)
+```
+
+## Gas and Unemployment
+
+Looking at gas prices with unemployment claims.  Here's the last 5 years
+
+
+```{r}
+library(fredr)
+fredr_set_key("052142bc981666b4ebcb1c8df98d006b")
+
+icnsa = fredr(series_id = "ICNSA")
+gasregw = fredr(series_id = "GASREGW")
+
+icnsa <- icnsa |>
+  mutate(date = as.Date(date)) |>
+  arrange(date)
+
+gasregw <- gasregw |>
+  mutate(date = as.Date(date)) |>
+  arrange(date)
+
+lastfive <- tail(icnsa,260)
+
+lastfive |> 
+  select(time = date, value) |>
+  ts_dygraphs()
+
+
+last5gas <- tail(gasregw,260)
+
+
+last5gas |> 
+  select(time = date, value) |>
+  ts_dygraphs()
+```
+
+
+## Adjustments?
+
+Unemployment claims doesn't seem to be adjusted for population (e.g. "per x thousand" or whatever), but also doesn't show upward trend? I'm surprised.
+
+Gas should probably be adjusted to some year's dollars?
+
+but... too bad.  not going to
+
+```{r}
+gasregw |> 
+  select(time = date, value) |>
+  ts_dygraphs()
+
+
+```
+
+
+## Lags
+
+Huge lag for weeks 1-5.  (That is, data from 1-5 weeks ago seems to tell you a lot about current claims.)  Not a huge spike at 52, which is surprising?
+
+```{r}
+icnsa_ts <- icnsa |>
+  as_tsibble(index = date)
+
+icnsa_ts |>
+  ACF(value, lag_max = 60) |>
+  autoplot()
+
+```
+
+## Difference
+
+ok not actually sure what to make of this one.
+
+```{r}
+icnsa_ts |>
+  autoplot(difference(value)) +
+  labs(
+    title = "Weekly Change in ICNSA",
+    y = "Change in claims",
+    x = "Week"
+  )
+
+icnsa_ts |>
+  ACF(difference(value), lag_max = 20) |>
+  autoplot()
+
+
+```
+
+
+## Looking at lag 1 more
+
+
+```{r}
+icnsa_ts |>
+  ggplot(aes(x = lag(value, 1), y = value)) +
+  geom_point() +
+  labs(
+    title = "ICNSA: Current Week vs Previous Week",
+    x = "ICNSA at lag 1",
+    y = "ICNSA this week"
+  )
+
+
+fit_ar1 <- icnsa_ts |>
+  model(ARIMA(value ~ pdq(1,0,0)))
+
+report(fit_ar1)
+
+fit_ar1 |>
+  forecast(h = 1)
+```
+
+So if we say
+
+$$X_t = c + \phi_1 X_{t-1} + Z_t$$
+
+then estimate is 184236
+
+
+## Seasonal, so ... force a lag 52?
+
+Expect to see spikes at multiples of 52.
+But... not really within the blue bars.
+
+Model would be
+
+$$
+X_t = \beta_0 + \beta_1 X_{t-1} + \beta_2 X_{t-52} + \epsilon_t
+$$
+Next prediction would be:
+181484.8
+
+
+```{r}
+icnsa_ts |>
+  ACF(value, lag_max = 52) |>
+  autoplot()
+
+icnsa_ts |>
+  ACF(value, lag_max = 260) |>
+  autoplot()
+
+
+
+icnsa_lag <- icnsa |>
+  arrange(date) |>
+  mutate(
+    lag1 = lag(value, 1),
+    lag52 = lag(value, 52)
+  )
+
+
+model <- lm(value ~ lag1 + lag52, data = icnsa_lag)
+
+summary(model)
+
+new_data <- data.frame(
+  lag1 = 170626,
+  lag52 = 204862
+)
+
+predict(model, newdata = new_data)
+```
+
+
+## Bring in gas prices
+
+not going to worry about real vs nominal dollars, even though I think that would be the right move
+
+Data for gas starts in 1990; claims data starts in 1967
+Also, the data comes out on a different day of the week
+
+```{r}
+
+gasregw_ts <- gasregw |>
+  as_tsibble(index = date)
+
+gasregw_ts |>
+  autoplot(value) +
+  labs(
+    title = "Weekly Regular Gasoline Prices",
+    y = "Dollars per gallon",
+    x = "Week"
+  )
+
+range(icnsa$date)
+range(gasregw$date)
+
+```
+
+
+## Alignment. Bad
+
+This was not the best way to do this. In particular, one of these datasets is missing a data point, because the weekly alignment gets off/mismatched.
+
+Too bad.  Close enough.
+
+Looks like, when gas prices are low, unemployment claims are high, and vice versa.  I'm going to force gas into the model for homework reasons.  And at lag 0.
+
+This isn't quite right... we wouldn't "know ahead of time" the gas price any more than we would know the claims.  So I guess this is a lag 1.  (But also, the day of the week that these come out is offset, so...)
+
+
+Also, now that gas is in the model, lag52 is no longer statistically significant.  I think the model is better without gas.  BUT!  prediction is 166248.
+
+```{r}
+
+icnsa_gas <- data.frame(
+  icnsa = tail(icnsa$value, 1000),
+  gas   = tail(gasregw$value, 1000)
+)
+
+
+ccf(icnsa_gas$gas, icnsa_gas$icnsa,
+    lag.max = 60,
+    main = "CCF: Gas Prices and Initial Claims")
+
+icnsa_gas_lag <- icnsa_gas |>
+  mutate(
+    lag1 = lag(icnsa, 1),
+    lag52 = lag(icnsa, 52)
+  )
+
+
+model_gas <- lm(
+  icnsa ~ lag1 + lag52 + gas,
+  data = icnsa_gas_lag
+)
+
+summary(model_gas)
+
+
+new_data <- data.frame(
+  lag1 = icnsa_gas_lag$icnsa[nrow(icnsa_gas_lag)],
+  lag52 = icnsa_gas_lag$icnsa[nrow(icnsa_gas_lag) - 51],
+  gas = icnsa_gas_lag$gas[nrow(icnsa_gas_lag)]
+)
+
+predict(model_gas, newdata = new_data)
+```
