@@ -1,0 +1,362 @@
+---
+title: "2026 Time Series"
+author: "05-arima-diagnostics"
+format: revealjs
+editor: source
+toc: true
+toc-depth: 1
+slide-number: true
+smaller: false
+scrollable: true 
+editor_options: 
+  chunk_output_type: console
+---
+
+::: {.hidden}
+$$
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{amsfonts}
+\newcommand\mcy{{\bf y}}
+$$
+:::
+
+```{r, include=FALSE}
+library(forecast)
+library(fpp3)
+library(tidyverse)
+library(tsbox)
+library(zoo)
+library(seasonal)
+library(astsa)
+library(patchwork)
+library(tseries)
+```
+
+```{r setup, include=FALSE}
+# Set up chunk for all slides
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  cache = TRUE,
+  dev.args = list(pointsize = 11)
+)
+```
+
+# ---- Estimation
+
+## Method of Moments 
+
+The idea behind these estimators is twidewidehat of equating population moments to sample moments and then solving for the parameters in terms of the sample moments.
+
+Start with AR(p) model
+
+$$
+x_t = \phi_1 x_{t-1} + \cdots + \phi_p x_{t-p} + w_t
+$$
+
+## Yule Walker Estimators
+  
+From this AR(p) recursion we can derive moment based estimators:
+
+$$
+\widehat{\phi} = \widehat{\Gamma}^{-1}\widehat{\gamma}, \quad \widehat{\sigma}^2 = \widehat{\gamma}(0) - \widehat{\gamma}^\prime \widehat{\Gamma}^{-1}\widehat{\gamma}
+$$
+
+::: {.callout-tip}
+## Exercise for you
+Show how to go from AR(p) recursion to the Yule-Walker estimator
+
+Hint: Multiply through by $X_t$ and take expected value
+:::
+
+  
+## Yule Walker Example
+  
+```{r}
+set.seed(123)
+x = arima.sim(model = list(ar = c(1.5, -.75)), 
+              n = 144)
+sample_acf = acf(x, plot = FALSE)$acf
+Gam_hat = toeplitz(sample_acf[1:2])
+gam_hat = sample_acf[2:3]
+solve(Gam_hat) %*% gam_hat
+ar.yw(x)
+```
+
+## OLS Estimation of AR(p)
+
+The AR equation is suitable for least squares estimation.
+
+Let ${\bf X}_t = (1 : X_t : \ldots,X_{t-p+1}),$
+${\bf X} = [{\bf X}_p': \cdots : {\bf X}_{T-1}']',$  ${\bf Y} = (X_{p+1}, \ldots, X_T)',$
+${\bf Z} = (Z_{p+1}, \ldots, Z_T)'$
+and $\boldsymbol{\beta} = (\alpha: \phi_1: \ldots \phi_p)'.$ Then the data equation can be written in the form of a multiple linear regression (MLReg)
+
+$$ {\bf Y} = {\bf X}\boldsymbol{\beta} + {\bf Z} $$
+
+The standard estimation for MLReg applies here as well. The **ordinary least squares (OLS)** estimator is 
+
+$$\hat{\boldsymbol{\beta}} = ({\bf X}'{\bf X})^{-1}{\bf X}'{\bf Y}$$
+
+## Gaussian Likelihood
+
+- In this we assume $\{X_t\}$ is a Gaussian time series
+  * mean zero
+  * ACVF $\gamma(h) = E[X_t X_{t+h}]$
+  
+- Let ${\bf X}_n = (X_1, \ldots, X_n)^\prime$
+- $E[{\bf X}_n {\bf X}_n^\prime] = \Gamma_n$ an $n\times n$ matrix (assume nonsingular)
+
+The likelihood of ${\bf X}_n$ is:
+
+$$
+L(\Gamma_n)
+=
+(2\pi)^{-n/2}
+(det ~\Gamma_n)^{-1/2}
+exp\left( \frac{1}{2} {\bf X}_n^\prime \Gamma_n^{-1} {\bf X}_n \right)
+$$
+
+## Alternative GL representations
+
+- The direct calculation of $\det(\Gamma_n)$ and $\Gamma_n^{-1}$ can be avoided by expressing this in terms of the one-step predictors $\hat{X_i}$, and their mean squared errors $v_{i-1}$
+- Both are easily calculated *recursively* from the **innovations algorithm**
+
+## GL representation
+
+For a normal ARMA(p,q) model, let $\beta = (\mu, \phi_1,...,\phi_p, \theta_1,...,\theta_q)'$ be the $(p + q + 1)$-dimensional vector of the model parameters. 
+
+The likelihood can be written as
+
+$$
+L(\beta, \sigma_w^2) = {\prod_{t=1}^{n} f(x_t \,|\, x_{t-1},...,x_1)}.
+$$
+
+The conditional distribution of $x_t$ given $x_{t-1},...,x_1$ is Gaussian with mean $x_{t-1}$ and variance $P_t$.
+
+
+## 
+
+
+The likelihood can be written in terms of one-step ahead conditional densities 
+$$ L(\beta, \sigma_z^2|data) = \prod_{t=1}^T N(X_t| X_{t}^{t-1}, P_t^{t-1})$$
+w
+here $X_t^{t-1} = E(X_t| X_{t-1}, X_{t-2}, \ldots, X_1)$ is the one-step ahead predictor (BLP) for the Gaussian model and 
+
+$$ P_t^{t-1} = \gamma(0)\prod_{j=1}^{t-1}(1 - \phi_{jj}^2)$$
+
+
+## Parameter estimation 
+
+- In practice, we maximize the GL to find parameter estimates
+- Most software will return the value of the log likelihood of the data
+  * the logarithm of the probability of the observed data coming from the estimated model
+- 
+
+## Information Criteria
+
+Good models are obtained by minimising the AIC, AICc or BIC
+
+- $\text{AIC} = -2 \log(L) + 2(p + q + k + 1)$
+- $\text{AICc} = \text{AIC} + \frac{2(p + q + k + 1)(p + q + k + 2)}{T - p - q - k - 2}$
+- $\text{BIC} = \text{AIC} + \left[\log(T) - 2\right](p + q + k + 1)$
+
+# ---- Diagnostics
+
+## Residuals
+
+Define residuals
+
+## Residual autocorrelation
+
+- Plotting $\widehat{\rho}_w(h)$ can be a good visual test
+- We can perform a general test that take into consideration the magnitudes of the residual ACF lags as a group
+
+Ljung-Box-Pierce Q-statistic:
+$$
+Q = 
+n(n+2)
+\sum_{h=1}^{H}
+\frac{\widehat{\rho}^2_w(h)}{n-h}
+$$
+
+## LBQ stat
+
+- Under the null hypothesis of zero ACF
+$$
+Q \sim \chi^2_{H-p-q}
+$$
+- Thus we would reject the null at level $\alpha$ if the value of $Q$ exceeds the $(1-\alpha)$-quantile of the $\chi^2$ distribution. 
+
+## Example Box-Jenkins fitting method
+
+Lets fit an ARIMA model to the following data:
+
+```{r, echo=FALSE}
+set.seed(123)
+x = arima.sim(model = list(ar = c(1.5, -.75)), 
+              n = 144)
+plot(x)
+```
+
+## Is series stationary?
+
+- Visually series appears to be stationary: $d = 0$
+
+- The Augmented Dickey-Fuller Test confirms this 
+
+```{r}
+adf.test(x)
+```
+
+
+## What are candidate AR/MA orders?
+
+```{r}
+tsdisplay(x)
+```
+
+## Some candidate models to try
+
+|             | **p** | **q** |   |   |
+|-------------|-------|-------|---|---|
+| **model 1** | 1     | 0     |   |   |
+| **model 2** | 0     | 1     |   |   |
+| **model 3** | 2     | 0     |   |   |
+
+```{r}
+m1 = Arima(x, order = c(1, 0, 0))
+m2 = Arima(x, order = c(0, 0, 1))
+m3 = Arima(x, order = c(2, 0, 0))
+```
+
+## ARIMA(1, 0, 0)
+
+:::: {.columns}
+
+::: {.column width="50%"}
+```{r}
+m1
+```
+:::
+
+::: {.column width="50%"}
+```{r}
+acf(resid(m1))
+```
+:::
+
+::::
+
+## ARIMA(0, 0, 1): 
+
+:::: {.columns}
+
+::: {.column width="50%"}
+```{r}
+m2
+```
+:::
+
+::: {.column width="50%"}
+```{r}
+acf(resid(m2))
+```
+:::
+
+::::
+
+## ARIMA(2, 0, 0)
+
+:::: {.columns}
+
+::: {.column width="50%"}
+```{r}
+m3
+```
+:::
+
+::: {.column width="50%"}
+```{r}
+acf(resid(m3))
+```
+:::
+
+::::
+
+## Important note
+
+- This was simulated data from an AR(2) model!
+- Real data will NEVER be this simple and clean model
+- Some ACF lags will be hard to interpret
+- AIC/BIC values will be much closer together
+
+# ---- Fit SARIMA(p, d, q)(P, D, Q)
+
+## Let's try it out
+
+Recall how to download data from the FRED:
+
+```{r, echo=FALSE}
+library(fredr)
+fredr_set_key("052142bc981666b4ebcb1c8df98d006b")
+```
+
+```{r}
+library(fredr)
+# fredr_set_key("your_key_here")
+
+dat = fredr(series_id = "MSACSR") |> 
+  select(time = date, value) 
+
+ts_plot(dat)
+```
+
+## Clearly need d=1, What about AR/MA/SAR/SMA orders?
+
+:::: {.columns}
+
+::: {.column width="50%"}
+```{r}
+x = ts_ts(dat)
+acf(diff(x), lag.max = 12*5)
+```
+:::
+
+::: {.column width="50%"}
+```{r}
+pacf(diff(x), lag.max = 12*5)
+```
+:::
+
+::::
+
+## Lets try SARIMA(0, 1, 1)(0, 0, 1)
+
+```{r}
+fit = Arima(x, order = c(0, 1, 1), seasonal = c(0, 0, 1))
+acf(resid(fit))
+```
+
+## Lets try SARIMA(0, 1, 1)(0, 1, 1)
+
+Might need to add seasonal difference, $D=1$
+
+```{r}
+fit2 = Arima(x, order = c(0, 1, 1), seasonal = c(0, 1, 1))
+acf(resid(fit2))
+```
+
+Moderately better, maybe...
+
+## Lets try SARIMA(0, 1, 1)(1, 1, 0)
+
+```{r}
+fit3 = Arima(x, order = c(0, 1, 1), seasonal = c(1, 1, 0))
+acf(resid(fit3))
+```
+
+Looks worse!
+

@@ -5,10 +5,11 @@
 /slides/03-regression/03-regression_files
 /slides/04-arima/04-arima_files
 /slides/04-arima/04-arima_cache
-/slides/05*
 /slides/06*
 /slides/07*
 /slides/08*
 /slides/09*
 /slides/10*
 
+/slides/05-arima-diagnosics/05-arima-diagnostics_cache
+/slides/05-arima-diagnosics/05-arima-diagnostics_files
