@@ -1,0 +1,620 @@
+---
+title: "2026 Time Series"
+author: "05a-box-jenkins-sarima"
+format: revealjs
+editor: source
+toc: true
+toc-depth: 1
+slide-number: true
+smaller: false
+scrollable: true
+editor_options:
+  chunk_output_type: console
+---
+
+::: {.hidden}
+$$
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{amsfonts}
+\newcommand\mcy{{\bf y}}
+$$
+:::
+
+```{r, include=FALSE}
+library(forecast)
+library(fpp3)
+library(tidyverse)
+library(tsbox)
+library(zoo)
+library(seasonal)
+library(astsa)
+library(patchwork)
+library(tseries)
+```
+
+```{r setup, include=FALSE}
+# Set up chunk for all slides
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  cache = TRUE,
+  dev.args = list(pointsize = 11)
+)
+```
+
+# The Box-Jenkins Methodology
+
+## Where we are
+
+- 04-arima: ARMA/ARIMA models, stationarity, differencing, ACF/PACF behavior
+- 05-arima-diagnostics: estimation (Yule-Walker, OLS, Gaussian likelihood), AIC/AICc/BIC, Ljung-Box residual testing
+- **Today**: turn all of that into a repeatable **workflow** for choosing, fitting, and checking a SARIMA$(p,d,q)(P,D,Q)_m$ model
+- Then compare our by-hand workflow to what software does when it automates the search
+
+## The Box-Jenkins loop
+
+A four-stage, iterative procedure:
+
+1. **Identification** — plot the data, transform/difference to reach stationarity, read the ACF/PACF for candidate orders
+2. **Estimation** — fit the candidate model(s) by (Gaussian) maximum likelihood
+3. **Diagnostic checking** — are the residuals white noise? If not, go back to step 1
+4. **Use the model** — forecast, or compare against other adequate candidates
+
+::: {.fragment}
+We will walk this loop by hand on four examples — two simulated, two real — and then see how `auto.arima()` automates steps 1–3.
+:::
+
+## Recall: SARIMA$(p,d,q)(P,D,Q)_m$
+
+$$
+\phi(B)\Phi(B^m)(1-B)^d(1-B^m)^D y_t = \theta(B)\Theta(B^m)\epsilon_t
+$$
+
+| symbol | role |
+|---|---|
+| $p, q$ | non-seasonal AR, MA order |
+| $d$ | non-seasonal (regular) differencing |
+| $P, Q$ | seasonal AR, MA order (at lags that are multiples of $m$) |
+| $D$ | seasonal differencing |
+| $m$ | number of observations per seasonal cycle (12 for monthly data) |
+
+## Step 1: Identification
+
+- Time plot: trend? seasonality? changing variance?
+- Stabilize variance first (log or Box-Cox), *then* stabilize the mean
+- Difference until the series looks stationary
+  - regular difference ($d$) removes stochastic trend
+  - seasonal difference ($D$, lag $m$) removes seasonal drift
+- Read the ACF/PACF of the (differenced) series for candidate $p,q,P,Q$
+
+## Step 1: ACF/PACF behavior (extending our earlier table)
+
+| | non-seasonal AR($p$) | non-seasonal MA($q$) | seasonal AR($P$) | seasonal MA($Q$) |
+|---|---|---|---|---|
+| **ACF** | tails off | cuts off after lag $q$ | tails off at lags $m, 2m, \ldots$ | cuts off after lag $Qm$ |
+| **PACF** | cuts off after lag $p$ | tails off | cuts off after lag $Pm$ | tails off at lags $m, 2m, \ldots$ |
+
+- In practice real series are messier than this table — treat it as a starting point for candidate models, not a verdict
+
+## Step 2: Estimation (recap)
+
+- Given candidate $(p,d,q)(P,D,Q)_m$, fit by Gaussian MLE
+- `forecast::Arima()`, base `stats::arima()`, and `astsa::sarima()` all do this for us
+- We already derived *why* this works (innovations likelihood via the one-step predictors) in 05-arima-diagnostics — today we just use it
+
+## Step 3: Diagnostic checking
+
+After fitting, the residuals $\widehat Z_t$ should look like white noise:
+
+- ACF/PACF of residuals: no significant spikes
+- **Ljung-Box** test: large p-value $\Rightarrow$ fail to reject "residuals are uncorrelated"
+- Residuals roughly normal, roughly constant variance
+- No leftover spikes at seasonal lags $m, 2m, \ldots$
+
+::: {.fragment}
+`forecast::checkresiduals()` and `astsa::sarima()` both build this panel for us automatically — we'll use both below.
+:::
+
+## Step 4: Comparing candidates
+
+- Among models that pass diagnostics, prefer the one with the smallest **AICc** (small-sample corrected AIC)
+- AICc can favor a model that still fails diagnostics — **always check residuals, don't just minimize AICc**
+- If several models both pass diagnostics and have similar AICc, prefer the simpler (more parsimonious) one
+
+# Example 1: Simulated, non-seasonal
+
+## Example 1: a simulated series
+
+```{r ex1-plot, echo=FALSE}
+set.seed(7)
+x1 <- arima.sim(model = list(ar = c(0.9, -0.4)), n = 200)
+plot.ts(x1, ylab = "", main = "")
+```
+
+**Discuss:** Does this look stationary? Any trend, or changing variance? What do you expect the ACF to look like?
+
+## Example 1: ACF and PACF
+
+```{r ex1-acfpacf}
+par(mfrow = c(1, 2))
+acf(x1, main = "ACF")
+pacf(x1, main = "PACF")
+```
+
+**Discuss:** Which one tails off, and which one cuts off? What order(s) would you propose, and for which piece of the model (AR or MA)?
+
+## Example 1: candidate models
+
+Based on the PACF cutting off sharply, a pure AR model is the natural first guess. We'll also keep an MA and a mixed model on the table.
+
+```{r ex1-fit}
+candidates1 <- list(
+  `AR(1)`     = Arima(x1, order = c(1, 0, 0)),
+  `AR(2)`     = Arima(x1, order = c(2, 0, 0)),
+  `ARMA(1,1)` = Arima(x1, order = c(1, 0, 1))
+)
+```
+
+| model | p | q |
+|---|---|---|
+| model 1 | 1 | 0 |
+| model 2 | 2 | 0 |
+| model 3 | 1 | 1 |
+
+## Example 1: compare by AICc
+
+```{r ex1-aicc}
+tibble(
+  model = names(candidates1),
+  aicc  = map_dbl(candidates1, "aicc")
+) |>
+  arrange(aicc)
+```
+
+## Example 1: diagnostics for the best candidate
+
+```{r ex1-diag}
+best1 <- candidates1[[which.min(map_dbl(candidates1, "aicc"))]]
+checkresiduals(best1)
+```
+
+## Example 1: what was it really?
+
+::: {.fragment}
+This series was simulated as a **true AR(2)** process with $\phi = (0.9, -0.4)$:
+
+```{r ex1-reveal}
+best1
+```
+
+The AICc comparison and the PACF cutoff both correctly pointed us to AR(2), and the residuals check out. Box-Jenkins worked as advertised — because this is clean, simulated data.
+:::
+
+# Example 2: Simulated, seasonal
+
+## Example 2: a simulated monthly series
+
+We won't reveal the generating model yet — just that it's monthly data.
+
+```{r ex2-sim}
+set.seed(2024)
+n <- 216
+phi <- 0.6
+Phi <- 0.6
+burn <- 30
+z <- rnorm(n + burn)
+xs <- numeric(n + burn)
+for (t in 14:(n + burn)) {
+  xs[t] <- phi * xs[t - 1] + Phi * xs[t - 12] - phi * Phi * xs[t - 13] + z[t]
+}
+xs <- xs[-(1:burn)]
+x2 <- ts(xs, frequency = 12, start = c(2005, 1))
+plot.ts(x2, ylab = "", main = "")
+```
+
+**Discuss:** Is there a visible seasonal pattern? Roughly what period?
+
+## Example 2: ACF and PACF out to 3 years
+
+```{r ex2-acfpacf}
+par(mfrow = c(1, 2))
+acf(x2, lag.max = 36, main = "ACF")
+pacf(x2, lag.max = 36, main = "PACF")
+```
+
+**Discuss:** Where are the biggest spikes? At the regular (low) lags, at the seasonal lags (12, 24, ...), or both? What does that suggest about $p, P$?
+
+## Example 2: candidate SARIMA models
+
+```{r ex2-fit}
+s1 <- Arima(x2, order = c(1, 0, 0), seasonal = c(1, 0, 0))
+s2 <- Arima(x2, order = c(1, 0, 0), seasonal = c(0, 0, 1))
+s3 <- Arima(x2, order = c(2, 0, 0), seasonal = c(1, 0, 0))
+
+tibble(
+  model = c("SARIMA(1,0,0)(1,0,0)[12]", "SARIMA(1,0,0)(0,0,1)[12]", "SARIMA(2,0,0)(1,0,0)[12]"),
+  aicc  = c(s1$aicc, s2$aicc, s3$aicc)
+) |>
+  arrange(aicc)
+```
+
+## Example 2: diagnostics for the winner
+
+```{r ex2-diag}
+checkresiduals(s1)
+```
+
+## Example 2: what was it really?
+
+::: {.fragment}
+This was built by hand from the recursion
+
+$$
+x_t = \phi\, x_{t-1} + \Phi\, x_{t-12} - \phi\Phi\, x_{t-13} + z_t,
+$$
+
+which is exactly $(1-\phi B)(1-\Phi B^{12})x_t = z_t$ — a **SARIMA(1,0,0)(1,0,0)$_{12}$** process with $\phi = \Phi = 0.6$:
+
+```{r ex2-reveal}
+s1
+```
+
+Again, AICc and the ACF/PACF both pointed us to the right structure — the seasonal AR spike at lag 12 in the PACF was the giveaway.
+:::
+
+# Example 3: Real data — FRED monthly series
+
+## Example 3: new housing starts
+
+Housing starts are a classic example of a series with both a business-cycle trend and a strong within-year seasonal pattern.
+
+```{r ex3-key, echo=FALSE}
+library(fredr)
+fredr_set_key("052142bc981666b4ebcb1c8df98d006b")
+```
+
+```{r ex3-fred}
+library(fredr)
+# fredr_set_key("your_key_here")
+
+housing <- fredr(series_id = "HOUSTNSA") |>
+  select(time = date, value)
+
+ts_plot(housing)
+```
+
+**Discuss:** Trend? Seasonality? Changing variance? What transform/differencing would you try first?
+
+## Example 3: differencing
+
+```{r ex3-diff}
+house_ts <- ts_ts(housing)
+par(mfrow = c(1, 2))
+plot.ts(diff(log(house_ts), lag = 12), main = "seasonal diff of log(starts)")
+plot.ts(diff(diff(log(house_ts), lag = 12)), main = "+ regular diff")
+```
+
+**Discuss:** Does the seasonal difference alone look stationary, or do we also need a regular difference?
+
+## Example 3: ACF/PACF of the differenced series
+
+```{r ex3-acfpacf}
+par(mfrow = c(1, 2))
+acf(diff(log(house_ts), lag = 12), lag.max = 36, main = "ACF")
+pacf(diff(log(house_ts), lag = 12), lag.max = 36, main = "PACF")
+```
+
+**Discuss:** Propose one or two candidate $(p,q)(P,Q)$ combinations to try, given $D=1$.
+
+## Example 3: fit a couple of candidates
+
+These are genuinely up for discussion in class — propose your own and add them.
+
+```{r ex3-fit}
+candidates3 <- list(
+  `(0,0,1)(0,1,1)[12]` = Arima(log(house_ts), order = c(0, 0, 1), seasonal = c(0, 1, 1)),
+  `(1,0,0)(0,1,1)[12]` = Arima(log(house_ts), order = c(1, 0, 0), seasonal = c(0, 1, 1)),
+  `(1,0,1)(1,1,1)[12]` = Arima(log(house_ts), order = c(1, 0, 1), seasonal = c(1, 1, 1))
+)
+
+tibble(
+  model = names(candidates3),
+  aicc  = map_dbl(candidates3, "aicc")
+) |>
+  arrange(aicc)
+```
+
+## Example 3: diagnostics for the best candidate so far
+
+```{r ex3-diag}
+best3 <- candidates3[[which.min(map_dbl(candidates3, "aicc"))]]
+checkresiduals(best3)
+```
+
+## Example 3: where this leaves us
+
+- Unlike the simulated examples, there's no "true model" to reveal — real data doesn't come with an answer key
+- We have a defensible candidate, chosen by AICc among models we proposed by hand
+- **Question for later:** is there a better model among combinations we *didn't* think to try? That's exactly what the computational search below is for.
+
+# Example 4: Real data — a biostat-type series
+
+## Example 4: US monthly pneumonia & influenza mortality
+
+`astsa::flu` — monthly pneumonia and influenza deaths per 10,000 people in the US, 1968–1978. A classic series for this kind of workflow, and a good stand-in for the epidemiological / biostat series you'll encounter in practice.
+
+```{r ex4-plot}
+plot.ts(flu, ylab = "", main = "")
+```
+
+**Discuss:** Seasonal pattern? Trend? Anything unusual in the plot (any spikes that don't look like ordinary seasonal peaks)?
+
+## Example 4: ACF/PACF
+
+```{r ex4-acfpacf}
+par(mfrow = c(1, 2))
+acf(flu, lag.max = 36, main = "ACF")
+pacf(flu, lag.max = 36, main = "PACF")
+```
+
+**Discuss:** What do the seasonal lags (12, 24, ...) look like? Do we need a seasonal difference?
+
+## Example 4: candidate SARIMA models
+
+```{r ex4-fit}
+specs4 <- list(
+  `(1,0,0)(0,1,1)[12]` = c(p = 1, d = 0, q = 0, P = 0, D = 1, Q = 1),
+  `(2,0,1)(0,1,1)[12]` = c(p = 2, d = 0, q = 1, P = 0, D = 1, Q = 1),
+  `(2,0,0)(1,1,0)[12]` = c(p = 2, d = 0, q = 0, P = 1, D = 1, Q = 0)
+)
+
+candidates4 <- map(specs4, function(s) {
+  Arima(flu, order = unname(s[c("p", "d", "q")]), seasonal = unname(s[c("P", "D", "Q")]))
+})
+
+tibble(
+  model = names(candidates4),
+  aicc  = map_dbl(candidates4, "aicc")
+) |>
+  arrange(aicc)
+```
+
+## Example 4: diagnostics — and a limitation
+
+Taking the lowest-AICc candidate from the table above, `sarima()` gives us the fit and the full diagnostic panel in one call:
+
+```{r ex4-diag}
+best4_name <- names(candidates4)[which.min(map_dbl(candidates4, "aicc"))]
+best4_spec <- unname(specs4[[best4_name]])
+sarima(flu, best4_spec[1], best4_spec[2], best4_spec[3],
+       best4_spec[4], best4_spec[5], best4_spec[6], 12, details = FALSE)
+```
+
+**Discuss:** Do the residuals look clean everywhere, or are there a few large residuals? (Look at the epidemic winters.) What does that tell you about the limits of a linear Gaussian SARIMA model for count/rate data with occasional outbreaks?
+
+## Example 4: the honest takeaway
+
+- A few winters (notably the 1968 "Hong Kong flu" pandemic season) produce residuals that are much larger than the rest — the Ljung-Box test and the ACF can still look fine "on average" while a handful of points are badly fit
+- This is a genuinely useful diagnostic finding, not a failure of the method — it tells us a linear Gaussian SARIMA is a reasonable *baseline* for this series but won't capture epidemic dynamics
+- Real diagnostic checking sometimes ends with "this model is adequate but limited," not just pass/fail
+
+# Computational Fitting Methods
+
+## Why automate?
+
+- We only tried 2–3 candidates by hand for each real series — there are many more plausible combinations
+- Searching all of them by hand doesn't scale (and gets tedious fast)
+- Software can search a grid of $(p,q,P,Q)$ values and rank them by AICc for us
+
+## The Hyndman-Khandakar algorithm (`auto.arima`)
+
+This is what `forecast::auto.arima()` (and `fable::ARIMA()`) does under the hood:
+
+1. Use unit-root tests (KPSS for $d$, a seasonal-strength test for $D$) to choose differencing
+2. Conditional on $d, D$: search over $p,q,P,Q$, minimizing AICc
+   - **stepwise search** (default): a greedy local search from a few starting models — fast, usually finds a good model, not guaranteed global best
+   - **`stepwise = FALSE`**: brute-force search over the *entire* grid up to `max.p`, `max.q`, `max.P`, `max.Q` — slower, but exhaustive
+3. Refit the chosen model by full MLE (the search itself may use an approximation for speed)
+
+## `auto.arima` on Example 3 (housing starts)
+
+```{r auto1}
+auto_h <- auto.arima(log(house_ts), stepwise = FALSE, approximation = FALSE, trace = FALSE)
+auto_h
+```
+
+Compare this AICc to our hand-picked candidates from Example 3.
+
+## `auto.arima` on Example 4 (flu)
+
+```{r auto2}
+auto_flu <- auto.arima(flu, stepwise = FALSE, approximation = FALSE, trace = FALSE)
+auto_flu
+checkresiduals(auto_flu)
+```
+
+## Under the hood: a brute-force AICc grid, by hand
+
+`auto.arima(..., stepwise = FALSE)` is itself just this loop, done for you:
+
+```{r grid-search}
+grid <- tidyr::crossing(p = 0:3, q = 0:3)
+
+grid_results <- purrr::pmap_dfr(grid, function(p, q) {
+  fit <- tryCatch(Arima(x1, order = c(p, 0, q)), error = function(e) NULL)
+  tibble(p = p, q = q, aicc = if (is.null(fit)) NA_real_ else fit$aicc)
+})
+
+grid_results |>
+  arrange(aicc) |>
+  head(5)
+```
+
+## Grid search: a cautionary note
+
+Look again at the table above — this grid was fit on **Example 1**, our simulated *true* AR(2) series. The raw-AICc winner is **not** AR(2):
+
+- A more heavily parameterized ARMA model can win on AICc purely by chance, in a finite sample
+- This is the same bias-variance tradeoff we've discussed elsewhere, just applied to model order instead of a tuning parameter
+- **Lesson:** a grid search over AICc is a great screening tool, but the winning model still needs diagnostic checking (and ideally, out-of-sample validation via the cross-validation methods below) before you trust it over a simpler, theoretically-motivated candidate
+
+## Seasonal grid search
+
+The same idea extends to $(p,d,q)(P,D,Q)_m$ — just add `P, D, Q` to the grid:
+
+```{r grid-search-seasonal}
+grid_s <- tidyr::crossing(p = 0:2, q = 0:2, P = 0:1, Q = 0:1)
+
+grid_s_results <- purrr::pmap_dfr(grid_s, function(p, q, P, Q) {
+  fit <- tryCatch(
+    Arima(flu, order = c(p, 0, q), seasonal = c(P, 1, Q)),
+    error = function(e) NULL
+  )
+  tibble(p = p, q = q, P = P, Q = Q,
+         aicc = if (is.null(fit)) NA_real_ else fit$aicc)
+})
+
+grid_s_results |> arrange(aicc) |> head(5)
+```
+
+This grid has $4 \times 4 \times 2 \times 2 = 64$ models to fit — trivial for a computer, painful by hand.
+
+# Cross-Validation for Time Series
+
+## Why not ordinary $k$-fold CV?
+
+Ordinary $k$-fold CV randomly assigns observations to folds, then predicts each fold from the rest.
+
+- For dependent data, this **leaks information**: a "training" fold can contain observations from both before *and after* a "test" observation
+- That lets the model implicitly use the future to predict the past — accuracy estimates from naive $k$-fold CV on time series are optimistically biased
+- We need CV schemes that respect time order
+
+## Time-series-appropriate alternative 1: rolling-origin CV
+
+Also called walk-forward validation, or evaluation on a rolling forecasting origin:
+
+- Fit on $y_1, \ldots, y_t$, forecast $y_{t+h}$, record the error
+- Advance the origin $t \to t+1$ (or by a step size), refit, repeat
+- Either an **expanding window** (training set grows) or a **sliding window** (training set has fixed length) — expanding is more common and is what `tsCV()` does
+
+This is the direct time-series analog of leave-one-out CV, just constrained to only ever predict forward.
+
+## Rolling-origin CV, by hand
+
+```{r rolling-cv}
+rolling_cv <- function(x, order, h = 1, min_train = 100) {
+  n <- length(x)
+  errors <- numeric(0)
+  for (origin in min_train:(n - h)) {
+    train <- x[1:origin]
+    fit <- tryCatch(arima(train, order = order), error = function(e) NULL)
+    if (is.null(fit)) next
+    fc <- predict(fit, n.ahead = h)$pred[h]
+    errors <- c(errors, x[origin + h] - fc)
+  }
+  errors
+}
+
+e_ar2   <- rolling_cv(as.numeric(x1), order = c(2, 0, 0))
+e_arma  <- rolling_cv(as.numeric(x1), order = c(1, 0, 1))
+
+tibble(
+  model = c("AR(2)", "ARMA(1,1)"),
+  rmse  = c(sqrt(mean(e_ar2^2)), sqrt(mean(e_arma^2)))
+)
+```
+
+## The packaged version: `forecast::tsCV()`
+
+```{r tscv}
+far_ar2  <- function(y, h) forecast(Arima(y, order = c(2, 0, 0)), h = h)
+far_arma <- function(y, h) forecast(Arima(y, order = c(1, 0, 1)), h = h)
+
+e1 <- tsCV(x1, far_ar2, h = 1)
+e2 <- tsCV(x1, far_arma, h = 1)
+
+tibble(
+  model = c("AR(2)", "ARMA(1,1)"),
+  rmse  = c(sqrt(mean(e1^2, na.rm = TRUE)), sqrt(mean(e2^2, na.rm = TRUE)))
+)
+```
+
+Same idea as our hand-written loop — `tsCV()` just handles the bookkeeping (and multiple horizons `h` at once).
+
+## Time-series-appropriate alternative 2: $h$-block / blocked CV
+
+A more literal analog of $k$-fold: split the series into contiguous **blocks** (not random single points) that preserve local order, and leave a small **gap** around each held-out block so training data immediately adjacent to it (which is highly correlated with it) isn't used to predict it.
+
+- Removes the "peeking at values right next to the test point" leakage that plain block-splitting still has
+- Less commonly used in practice than rolling-origin CV for forecasting tasks, but useful when you care about interpolation-style accuracy rather than pure forecasting
+
+## Block bootstrap: the idea
+
+We often want a standard error or interval for a statistic (a mean, a forecast, a parameter) computed from dependent data.
+
+- An ordinary (iid) bootstrap resamples individual observations — this **breaks the autocorrelation** and typically **understates** the true variability
+- A **block bootstrap** resamples contiguous *blocks* of length $\ell$ (with replacement), then glues them together — this preserves the local dependence structure within each block
+
+## Moving block bootstrap, by hand
+
+```{r block-boot}
+block_bootstrap <- function(x, l, B) {
+  n <- length(x)
+  n_blocks <- ceiling(n / l)
+  starts <- 1:(n - l + 1)
+  boot_stat <- numeric(B)
+  for (b in 1:B) {
+    chosen <- sample(starts, n_blocks, replace = TRUE)
+    x_boot <- unlist(lapply(chosen, function(s) x[s:(s + l - 1)]))[1:n]
+    boot_stat[b] <- mean(x_boot)
+  }
+  boot_stat
+}
+
+x_num <- as.numeric(x1)
+boot_block <- block_bootstrap(x_num, l = 12, B = 1000)
+boot_iid   <- replicate(1000, mean(sample(x_num, length(x_num), replace = TRUE)))
+
+tibble(
+  method = c("iid bootstrap", "moving block bootstrap"),
+  se     = c(sd(boot_iid), sd(boot_block))
+)
+```
+
+**Discuss:** Which SE is larger, and why does that make sense given $x_1$ is positively autocorrelated?
+
+## Block length and packaged alternatives
+
+- Choosing block length $\ell$ trades off two errors: too short and you lose the dependence structure (converges to iid bootstrap); too long and you have too few effective blocks (high variance in the bootstrap distribution itself)
+- Common rule of thumb: $\ell \propto n^{1/3}$, refined using how quickly the ACF decays
+- Packaged implementations you'll see in practice:
+  - `boot::tsboot(x, statistic, R, l, sim = "fixed")` — moving block bootstrap
+  - `boot::tsboot(..., sim = "geom")` — **stationary bootstrap** (Politis & Romano): block lengths are themselves random (geometric), which smooths out the edge effects of fixed-length blocks
+  - `tseries::tsbootstrap()` — another common interface to the same ideas
+
+# Putting It Together
+
+## The full workflow, one more time
+
+1. Plot, transform, difference $\to$ stationary series
+2. ACF/PACF $\to$ a short list of candidate $(p,q)(P,Q)$
+3. Fit candidates by MLE; rank by AICc
+4. Diagnostic-check the leading candidates (`checkresiduals()`, `sarima()`, Ljung-Box)
+5. If nothing passes, go back to step 2 with a revised list
+6. Optionally: cross-check against `auto.arima(stepwise = FALSE)` or a brute-force grid, and validate the final choice with rolling-origin CV rather than AICc alone
+
+## Key takeaways
+
+- On clean simulated data, the by-hand Box-Jenkins loop recovers the true model — this validates that the *method* works
+- On real data, there is no ground truth: AICc, diagnostics, and computational search are all just tools for building a *defensible* case for a model, not proof of correctness
+- Grid search / `auto.arima` can outperform (or overfit relative to) careful hand identification — use both, and always diagnostic-check the winner
+- AICc-based selection and cross-validated forecast accuracy can disagree; when they do, think about which one matches what you actually care about (in-sample fit vs. out-of-sample forecast performance)
+
+## For next time
+
+- Pick a monthly or quarterly series of your own (FRED, or a dataset from your own work)
+- Run the full workflow by hand: identify, estimate, diagnose
+- Then run `auto.arima(stepwise = FALSE)` and a rolling-origin CV comparison against your hand-picked model
+- Which one would you actually use, and why?
