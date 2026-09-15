@@ -1,0 +1,325 @@
+---
+title: "2026 Time Series"
+author: "06-regARIMA"
+format: revealjs
+editor: source
+toc: true
+toc-depth: 1
+slide-number: true
+smaller: false
+scrollable: true 
+editor_options: 
+  chunk_output_type: console
+---
+
+::: {.hidden}
+$$
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{amsfonts}
+\newcommand\mcy{{\bf y}}
+$$
+:::
+
+```{r, include=FALSE}
+library(forecast)
+library(fpp3)
+library(tidyverse)
+library(tsbox)
+library(zoo)
+library(seasonal)
+library(astsa)
+library(patchwork)
+library(tseries)
+```
+
+```{r setup, include=FALSE}
+# Set up chunk for all slides
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  cache = TRUE,
+  dev.args = list(pointsize = 11)
+)
+```
+
+# RegARIMA
+
+## regARIMA
+
+- We have discussed the <ins>classical regression</ins> model with uncorrelated errors
+
+$$ y_t = \beta_0 + \beta_1 x_{1, t} + \cdots + \beta_r x_{r, t} + \epsilon_t $$
+
+- Consider not the regression model where the error term, $x_t$ has some ACVF
+function $\gamma(h)$
+
+$$ y_t = \sum_{j=1}^{r}\beta_j z_{t, j} + x_t $$
+
+## Matrix form and estimator
+
+$$ \textbf{y} = \textbf{Z}\boldsymbol{\beta} + \textbf{x} $$
+
+We have derived 
+
+$$ \widehat{\beta} = 
+(Z^\prime \Gamma^{-1} Z)^{-1} Z^\prime \Gamma^{-1} y $$
+
+## ARMA Errors
+
+- The model needs the an ACVF function, and resulting $\Gamma$ to be fit.
+
+- It is often possible to assume a stationary covariance structure for the error 
+process that corresponds to a linear process and try to find an ARMA 
+representation.
+
+- This amounts to deciding on a $p$ and $q$, but how do we decide?
+
+## Example
+
+```{r}
+par(mfrow=c(3,1)) # plot the data
+plot(cmort, main="Cardiovascular Mortality", xlab="", ylab="") 
+plot(tempr, main="Temperature", xlab="", ylab="")
+plot(part, main="Particulates", xlab="", ylab="")
+```
+
+## Example
+
+```{r}
+pairs(
+  cbind(
+    Mortality=cmort, 
+    Temperature=tempr, 
+    Particulates=part
+  )
+) 
+```
+
+## Example
+
+- Consider model with <ins>uncorrelated</ins> errors
+
+$$ M_t = 
+\beta_1 + \beta_2 t + \beta_3 T_t + \beta_4 T_t^2 + \beta_5 P_t + \epsilon_t $$
+
+```{r}
+temp = tempr-mean(tempr) # mean center temp
+temp2 = temp^2
+trend = time(cmort) # time
+fit = lm(cmort~ trend + temp + temp2 + part, na.action=NULL) 
+summary(fit) # regression results
+```
+
+## AR and MA behavior
+
+Before we look at the residuals of the model and decide on what type of ACVF
+behavior we see. Let's look at known behavior:
+
+|       | AR(p)                 | MA(q)                     | 
+|-------|-----------------------|---------------------------|
+| ACF   | Tails off             | PACF Cuts off after lag p |
+| PACF  | Cuts off after lag p  | Tails off                 |
+
+
+## Example
+
+```{r}
+tsdisplay(residuals(fit), lag.max = 30)
+```
+
+## Example
+
+- Would have been a mistake to fit an error with uncorrelated residuals
+
+- A plot of the residuals indicates an AR(2) stochastic structure
+
+$$ M_t = 
+\beta_1 + \beta_2 t + \beta_3 T_t + \beta_4 T_t^2 + \beta_5 P_t + x_t $$ 
+
+where 
+
+$$ x_t = \phi_1 x_{t-1} + \phi_2 x_{t-2} + w_t $$
+
+## Example 
+
+- There are many R functions that will fit an ARMA model and allow regressors
+
+```{r}
+regarima_fit <- sarima(cmort, 2,0,0, xreg=cbind(trend,temp,temp2,part), details = FALSE)
+```
+
+## Example: residuals of regARIMA fit
+
+```{r}
+tsdisplay(resid(regarima_fit$fit), lag.max = 30)
+```
+
+## Overall proceedure
+
+1. Run OLS acting as if the errors are uncorrelated
+1. Identify ARMA model(s) for the residuals 
+1. Run WLS (or MLE) on the regression model with ACVF of specified model
+1. Inspect residuals of regARIMA model for whiteness, adjust if needed
+
+## Automatic modeling 
+
+- fpp3 text has some built in helper function for fitting regARIMA
+
+- To fit the regARIMA model we just fit, with AR(2) error we could use
+
+```{r, eval=FALSE}
+ARIMA(y ~ trend + temp + temp2 + part + pdq(2,0,0))
+```
+
+- If no `pdq()` is specified, automatic model choice will be made.
+
+
+## US personal consumption and Income
+
+- We would like to forecast changes in expenditure based on changes in income.
+
+```{r, echo=FALSE}
+us_change |>
+  pivot_longer(c(Consumption, Income),
+               names_to = "var", values_to = "value") |>
+  ggplot(aes(x = Quarter, y = value)) +
+  geom_line() +
+  facet_grid(vars(var), scales = "free_y") +
+  labs(title = "US consumption and personal income",
+       y = "Quarterly % change")
+```
+
+## Model fit 
+
+```{r}
+fit <- us_change |>
+  model(ARIMA(Consumption ~ Income))
+report(fit)
+```
+
+## Model fit residuals (regARIMA and OLS)
+
+```{r, echo=FALSE}
+bind_rows(
+    `Regression residuals` =
+        as_tibble(residuals(fit, type = "regression")),
+    `ARIMA residuals` =
+        as_tibble(residuals(fit, type = "innovation")),
+    .id = "type"
+  ) |>
+  mutate(
+    type = factor(type, levels=c(
+      "Regression residuals", "ARIMA residuals"))
+  ) |>
+  ggplot(aes(x = Quarter, y = .resid)) +
+  geom_line() +
+  facet_grid(vars(type))
+```
+
+# Forecasting 
+
+## Electricity Demand
+
+- Daily electricity demand can be modelled as a function of temperature
+
+- more electricity is used on cold days due to heating and hot days due to air conditioning
+
+- Moderate temperature requires the least amount of electricity
+    * This leads to both linear and non-linear dynamics
+
+
+## Electricity Demand
+
+```{r, echo=FALSE}
+vic_elec_daily <- vic_elec |>
+  filter(year(Time) == 2014) |>
+  index_by(Date = date(Time)) |>
+  summarise(
+    Demand = sum(Demand) / 1e3,
+    Temperature = max(Temperature),
+    Holiday = any(Holiday)
+  ) |>
+  mutate(Day_Type = case_when(
+    Holiday ~ "Holiday",
+    wday(Date) %in% 2:6 ~ "Weekday",
+    TRUE ~ "Weekend"
+  ))
+
+vic_elec_daily |>
+  ggplot(aes(x = Temperature, y = Demand, colour = Day_Type)) +
+  geom_point() +
+  labs(y = "Electricity demand (GW)",
+       x = "Maximum daily temperature")
+```
+
+## Electricity Demand
+
+```{r}
+vic_elec_daily |>
+  pivot_longer(c(Demand, Temperature)) |>
+  ggplot(aes(x = Date, y = value)) +
+  geom_line() +
+  facet_grid(name ~ ., scales = "free_y") + ylab("")
+```
+
+
+## Electricity Demand
+
+```{r}
+fit <- vic_elec_daily |>
+  model(ARIMA(Demand ~ Temperature + I(Temperature^2) +
+                (Day_Type == "Weekday")))
+report(fit)
+```
+
+## Electricity Demand
+
+```{r}
+fit |> gg_tsresiduals()
+```
+
+
+## Electricity Demand
+
+Conduct a LBQ test for significant autocorrelation in the residuals 
+
+```{r}
+Box.test(resid(fit)$.resid, lag = 14)
+```
+
+## Electricity Demand
+
+- There is clear heteroscedasticity in the residuals, with higher variance in January and February, and lower variance in May.
+- The model also has some significant autocorrelation in the residuals, and the histogram of the residuals shows long tails.
+- All of these issues with the residuals may affect the coverage of the prediction intervals, but the point forecasts should still be ok.
+
+## Electricity Demand: Forecast
+
+- Using the estimated model we **forecast 14 days ahead**
+- Starting from Thursday 1 January 2015 (a non-work-day being a public holiday for New Years Day).
+- In this case, we could obtain weather forecasts from the weather bureau for the next 14 days. 
+    * But for the sake of illustration, we will use scenario based forecasting (as introduced in Section 7.6 of fpp3) where we set the temperature for the next 14 days to a constant 26 degrees.
+- Working day dummy variables are set to known future values.
+
+## Electricity Demand: Forecast
+
+```{r}
+#| output-location: slide
+vic_elec_future <- new_data(vic_elec_daily, 14) |>
+  mutate(
+    Temperature = 26,
+    Holiday = c(TRUE, rep(FALSE, 13)),
+    Day_Type = case_when(
+      Holiday ~ "Holiday",
+      wday(Date) %in% 2:6 ~ "Weekday",
+      TRUE ~ "Weekend"
+    )
+  )
+forecast(fit, vic_elec_future) |>
+  autoplot(vic_elec_daily) +
+  labs(title="Daily electricity demand: Victoria",
+       y="GW")
+```
+
