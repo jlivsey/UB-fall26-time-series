@@ -39,6 +39,7 @@ cat("Modeling window:", format(min(icnsa_win$date)), "to", format(max(icnsa_win$
 icnsa_win <- icnsa_win |>
   mutate(covid = as.integer(date >= as.Date("2020-03-14") & date <= as.Date("2021-03-31")))
 
+# adding in the covariate of CCNSA
 ccnsa_raw <- read_csv(
   "https://fred.stlouisfed.org/graph/fredgraph.csv?id=CCNSA",
   show_col_types = FALSE
@@ -77,9 +78,88 @@ t_target <- as.numeric(target_date - t0)/7
 last_logCCNSA <- log(ccnsa_raw$CCNSA[ccnsa_raw$date == target_date - 14])
 sep_5 <- as.data.frame(cbind(t = t_target, covid = 0, logCCNSA_lag2 = last_logCCNSA))
 
+
+
+```
+
+Predicting using an ARIMA model:
+
+```{r}
+y <- ts(icnsa_win$logICNSA, frequency = 52, start = c(2010, 1))
+xreg_covid <- matrix(icnsa_win$covid, ncol = 1, dimnames = list(NULL, "covid"))
+
+ts_plot(y)
+ts_plot(diff(y))
+
+
+```
+
+Based on the original plot of the log(ICNSA) values, we can see a trend and non seasonality. When taking the differential, the data becomes stationary. Therefore, d = 1.
+
+```{r}
+
+d_order <- ndiffs(y)
+D_order <- nsdiffs(y)
+
+acf(diff(y, lag = 52), lag.max = 210, main = "ACF")
+pacf(diff(y, lag = 52), lag.max=210, main = "PACF")
+
+
+
+```
+
+To further check this, we can run ndiffs() on our data set. Despite there looking like a seasonal differential, the nsdiffs() resulted in a D=0, so will test ARIMA models based off of that belief.
+
+Looking at the ACF, there is a decay after 0 with a negative peak at lag 1, followed by a decay back to around 0. The PACF shows a significant peak at lag 1 and a slighlty less significant peak at lag 2. This leads me to believe that for our seasonal component, we should test p = 1,2 and q = 0.
+
+```{r}
+Arima1 <- Arima(y, order=c(1,1,1), seasonal=list(order=c(1,0,0), period = 52), xreg = xreg_covid, method = "CSS-ML")
+Arima1$aicc
+
+Arima2 <- Arima(y, order=c(0,1,1), seasonal=list(order=c(1,0,0), period = 52), xreg = xreg_covid, method = "CSS-ML")
+Arima2$aicc
+
+#Arima3 <- Arima(y, order=c(1,1,0), seasonal=list(order=c(1,0,0), period = 52), xreg = xreg_covid, method = "ML")
+#Arima3$aicc
+
+#Arima4 <- Arima(y, order=c(1,1,1), seasonal=list(order=c(2,0,0), period = 52), xreg = xreg_covid, method = "CSS-ML")
+#Arima4$aicc
+
+Arima5 <- Arima(y, order=c(0,1,1), seasonal=list(order=c(2,0,0), period = 52), xreg = xreg_covid, method = "CSS-ML")
+Arima5$aicc
+
+#Arima6 <- Arima(y, order=c(1,1,0), seasonal=list(order=c(2,1,0), period = 52), xreg = xreg_covid, method = "CSS-ML")
+#Arima6$aicc
+
+  
+```
+
+The models above that are commented out produced errors when attempting to run. However, Arima5 (0,1,1)(2,0,0)\[52\] produced the smallest AICc value. Now let's check the residua
+
+```{r}
+checkresiduals(Arima5)
+
+```
+
+Looking at the Ljung-Box test, we get a p-value of 0.08316, which is not significant. Since the aicc was only slightly smaller for the Arima2 model, I will look at that model's performance.
+
+```{r}
+checkresiduals(Arima2)
+
+
+```
+
+The p-value associated with the Ljung-Box test using Arima2 model is 0.009189, leading to it being significant and to use the Arima2 model to forecast the icnsa value.
+
+```{r}
 regression_predict_log <- predict(reg_fit2, newdata = sep_5,interval = "prediction", level = 0.95)
 regression_predict <- exp(regression_predict_log)
-print(regression_predict)
+cat("Regression Based Prediction: ", round(regression_predict[1],2), 
+    " (95% PI: ", round(regression_predict[2],2), " - ", round(regression_predict[3],2), ") \n")
 
-
+Arima_fc <- forecast(Arima2, h=1, xreg=matrix(0, nrow=1, ncol=1, dimnames = list(NULL, "covid")), level = 95)
+Arima_forecast <- exp(as.numeric(Arima_fc$mean))
+cat("ARIMA Based Prediction: ", round(Arima_forecast, 2),
+    " (95% PI: ", round(exp(as.numeric(Arima_fc$lower)), 0),
+    " - ", round(exp(as.numeric(Arima_fc$upper)), 0), ")\n", sep = "")
 ```
