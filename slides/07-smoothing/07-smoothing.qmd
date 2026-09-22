@@ -1,0 +1,450 @@
+---
+title: "2026 Time Series"
+author: "07-smoothing"
+format: revealjs
+editor: source
+toc: true
+toc-depth: 1
+slide-number: true
+smaller: false
+scrollable: true 
+editor_options: 
+  chunk_output_type: console
+---
+
+::: {.hidden}
+$$
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{amsfonts}
+\newcommand\mcy{{\bf y}}
+$$
+:::
+
+```{r, include=FALSE}
+library(forecast)
+library(fpp3)
+library(tidyverse)
+library(tsbox)
+library(zoo)
+library(seasonal)
+library(astsa)
+library(patchwork)
+library(tseries)
+```
+
+```{r setup, include=FALSE}
+# Set up chunk for all slides
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  cache = TRUE,
+  dev.args = list(pointsize = 11)
+)
+```
+
+
+# ---- Smoothing Splines
+
+## Basics before smoothing splines
+
+- An obvious way to smooth data would be to fit a polynomial regression in terms of time.
+
+$$ x_t = \beta_0 + \beta_1 t + \beta_2 t^2 + \beta_3 t^3 + w_t $$
+
+- An extension of polynomial regression is to first divide time $t = 1, \ldots, n$
+into $k$ intervals where $t_1, \ldots, t_k$ are called _knots_. 
+
+  * Fit polynomial regression on each interval. This is called **cubic splines**
+
+## Smoothing Splines
+
+- Minimizes a compromise between the fit and the degree of smoothness given by
+$$ \sum_{t=1}^{n}[x_t - m_t]^2 + \lambda \int (m_t^{\prime\prime})^2 dt $$
+where $m_t$ is a cubic spline with knot at each $t$. $\lambda$ controlls the degree of smoothness
+
+
+## Smoothing spline story time
+
+Think of taking a long drive where $m_t$ is the position of your car at time $t$. In this case, $m_t^{''}$ is instantaneous acceleration/deceleration, and $\int (m_t^{''})^2 \, dt$ is a measure of the total amount of acceleration and deceleration on your trip. A smooth drive would be one where a constant velocity is maintained (i.e., $m_t^{''} = 0$). A choppy ride would be when the driver is constantly accelerating and decelerating, such as beginning drivers tend to do.
+
+If $\lambda = 0$, we don’t care how choppy the ride is, and this leads to $m_t = x_t$, the data, which are not smooth. If $\lambda = \infty$, we insist on no acceleration or deceleration ($m'' = 0$); in this case, our drive must be at constant velocity, $m_t = c + vt$, and consequently very smooth. Thus, $\lambda$ is seen as a trade-off between linear regression (completely smooth) and the data itself (no smoothness). The larger the value of $\lambda$, the smoother the fit.
+
+## Smoothing spline in R
+
+- In R, the smoothing parameter is called `spar` and it is monotonically related to $\lambda$
+
+- type `?smooth.spline` to view the help file for details.
+
+```{r}
+plot(soi)
+lines(smooth.spline(time(soi), soi, spar=.5), lwd=2, col=4)
+lines(smooth.spline(time(soi), soi, spar= 1), lty=2, lwd=2, col=2)
+```
+
+## Interpolating Missing values
+
+```{r}
+n = 30
+t = 1:n
+c = sin(2*pi*t / 10)
+x = c + rnorm(n)
+plot(x, type = "b")
+lines(c, col = 'grey')
+```
+
+##
+
+- Inject a missing value
+
+```{r}
+x[15] = NA
+plot(x, type = "b")
+abline(v = 15, lty = 'dotted')
+```
+
+##
+
+- fit basic smooth spline, note need to drop NA index
+
+```{r}
+ss = smooth.spline(x = time(x[-15]), y = x[-15]) # auto select spar
+plot(x, type = "b")
+lines(ss, col = 2)
+points(ss$x[15], ss$y[15], col = 2, pch = 19)
+```
+
+## Using `na.spline` from zoo 
+
+- No need to find index of NA values
+
+```{r}
+plot(x, type = "b")
+points(ss$x[15], ss$y[15], col = 2, pch = 19)
+points(na.spline(x), col = 3, pch = 19)
+```
+
+# ---- Simple Exponential Smoothing
+
+## Basic Idea
+
+- Naive method 
+
+$$ \widehat{y}_{T+h | T} = y_T $$
+
+- Average Method
+
+$$ \widehat{y}_{T+h | T} = \frac{1}{T} \sum_{t=1}^{T} y_t $$
+
+
+These are both quite extreme forecasts!
+
+
+##
+
+- We often want something between these two extremes. 
+
+- Attach larger weights to more recent observations than to observations from the distant past. 
+
+- This is exactly the concept behind simple **exponential smoothing**
+
+$$
+\widehat{y}_{T+1 | T} 
+= 
+\alpha y_T + \alpha(1-\alpha)y_{T-1} + \alpha(1-\alpha)^2 y_{T-2} + \cdots 
+$$
+
+where $0 \leq \alpha \leq 1$
+
+## 
+
+- We will look at two equivalent forms of simple exponential smoothing
+
+1. Weighted average form
+
+1. Component form
+
+## Weighted average form 
+
+- The forecast at time $T+1$ is equal to a weighted average between the most recent observation $y_T$ and the previous forecast $\widehat{y}_{T|T-1}$
+
+$$
+\hat{y}_{T+1|T} = \alpha y_T + (1-\alpha) \hat{y}_{T|T-1}
+$$
+
+## Component Form
+
+- For simple exponential smoothing, the only component included is the level $\ell_t$
+
+$$
+\begin{align*}
+  \text{Forecast equation}  && \hat{y}_{t+h|t} & = \ell_{t}\\
+  \text{Smoothing equation} && \ell_{t}        & = \alpha y_{t} + (1 - \alpha)\ell_{t-1},
+\end{align*}
+$$
+
+## Optimisation
+
+- For simple exponential smoothing, we need to select the values of $\alpha$ and $\ell_0$.
+
+- the unknown parameters and the initial values for any exponential smoothing method can be estimated by minimising the SSE
+
+$$
+\text{SSE}=\sum_{t=1}^T(y_t - \hat{y}_{t|t-1})^2=\sum_{t=1}^Te_t^2.
+$$
+
+# ---- Adding Trend and Seasonality 
+
+## Holt’s linear trend method {.smaller}
+
+- This method involves a forecast equation and two smoothing equations (one for the level and one for the trend)
+
+$$
+\begin{align*}
+  \text{Forecast equation}&& \hat{y}_{t+h|t} &= \ell_{t} + hb_{t} \\
+  \text{Level equation}   && \ell_{t} &= \alpha y_{t} + (1 - \alpha)(\ell_{t-1} + b_{t-1})\\
+  \text{Trend equation}   && b_{t}    &= \beta^*(\ell_{t} - \ell_{t-1}) + (1 -\beta^*)b_{t-1},
+\end{align*}
+$$
+
+- $\ell_t$  denotes an estimate of the level of the series at time t
+
+- $b_t$ denotes an estimate of the trend (slope) of the series at time t.
+ 
+- $\alpha$ is the smoothing parameter
+
+- $\beta^*$ smoothing parameter for the trend
+
+## Damped trend methods
+
+- This method also includes a damping parameter $0 < \phi < 1$
+
+- If $\phi = 1$ the method is identical to Holt’s linear method
+
+- $\phi$ dampens the trend so that it approaches a constant some time in the future
+
+$$
+\begin{align*}
+  \hat{y}_{t+h|t} &= \ell_{t} + (\phi+\phi^2 + \dots + \phi^{h})b_{t} \\
+  \ell_{t} &= \alpha y_{t} + (1 - \alpha)(\ell_{t-1} + \phi b_{t-1})\\
+  b_{t} &= \beta^*(\ell_{t} - \ell_{t-1}) + (1 -\beta^*)\phi b_{t-1}.
+\end{align*}
+$$
+
+## Example: Australian population
+
+```{r, echo=FALSE}
+aus_economy <- global_economy |>
+  filter(Code == "AUS") |>
+  mutate(Pop = Population / 1e6)
+autoplot(aus_economy, Pop) +
+  labs(y = "Millions", title = "Australian population")
+```
+
+##
+
+- code to fit both Holt's linear trend method and the dampened trend model
+
+```{r}
+#| output-location: slide
+aus_economy |>
+  model(
+    `Holt's method` = ETS(Pop ~ error("A") +
+                       trend("A") + season("N")),
+    `Damped Holt's method` = ETS(Pop ~ error("A") +
+                       trend("Ad", phi = 0.9) + season("N"))
+  ) |>
+  forecast(h = 15) |>
+  autoplot(aus_economy, level = NULL) +
+  labs(title = "Australian population",
+       y = "Millions") +
+  guides(colour = guide_legend(title = "Forecast"))
+```
+
+## Adding Seasonality 
+
+- Holt (1957) and Winters (1960) extended Holt’s method to capture seasonality
+
+- The Holt-Winters seasonal method comprises the forecast equation and three smoothing equations 
+  * one for the level $\ell_t$ (smoothing param $\alpha$)
+  * one for the trend $b_t$ (smoothing param $\beta^*$)
+  * one for the seasonal component $s_t$ (smoothing param $\gamma$)
+  * let $m$ to denote the period of the seasonality
+  
+
+## Additive Holt-Winters Model
+  
+$$
+\begin{align*}
+  \hat{y}_{t+h|t} &= \ell_{t} + hb_{t} + s_{t+h-m(k+1)} \\
+  \ell_{t} &= \alpha(y_{t} - s_{t-m}) + (1 - \alpha)(\ell_{t-1} + b_{t-1})\\
+  b_{t} &= \beta^*(\ell_{t} - \ell_{t-1}) + (1 - \beta^*)b_{t-1}\\
+  s_{t} &= \gamma (y_{t}-\ell_{t-1}-b_{t-1}) + (1-\gamma)s_{t-m},
+\end{align*}
+$$
+
+## Multiplicative Holt-Winters Model
+
+$$
+\begin{align*}
+  \hat{y}_{t+h|t} &= (\ell_{t} + hb_{t})s_{t+h-m(k+1)} \\
+  \ell_{t} &= \alpha \frac{y_{t}}{s_{t-m}} + (1 - \alpha)(\ell_{t-1} + b_{t-1})\\
+  b_{t} &= \beta^*(\ell_{t}-\ell_{t-1}) + (1 - \beta^*)b_{t-1}                \\
+  s_{t} &= \gamma \frac{y_{t}}{(\ell_{t-1} + b_{t-1})} + (1 - \gamma)s_{t-m}.
+\end{align*}
+$$
+
+## Example: Domestic overnight trips in Australia
+
+```{r}
+#| output-location: slide
+aus_holidays <- tourism |>
+  filter(Purpose == "Holiday") |>
+  summarise(Trips = sum(Trips)/1e3)
+fit <- aus_holidays |>
+  model(
+    additive = ETS(Trips ~ error("A") + trend("A") +
+                                                season("A")),
+    multiplicative = ETS(Trips ~ error("M") + trend("A") +
+                                                season("M"))
+  )
+fc <- fit |> forecast(h = "3 years")
+fc |>
+  autoplot(aus_holidays, level = NULL) +
+  labs(title="Australian domestic tourism",
+       y="Overnight trips (millions)") +
+  guides(colour = guide_legend(title = "Forecast"))
+```
+
+# ---- Forecasting
+
+## Forecasting
+
+- Point forecasts can be obtained from the models by iterating the equations 
+
+- For example, $\widehat{y}_{T+2|T} = \ell_T + 2b_T$ and so on.
+
+- Using `forecast()` function from **fable** package:
+
+```{r}
+#| output-location: slide
+fit |>
+  forecast(h = 8) |>
+  autoplot(aus_holidays)+
+  labs(title="Australian domestic tourism",
+       y="Overnight trips (millions)")
+```
+
+## Prediction Intervals
+
+- The prediction intervals will differ between models with additive and multiplicative methods
+
+- For most ETS models, a prediction interval can be written as:
+
+$$
+\widehat{y}_{T+h | T} \pm c\sigma_h
+$$
+
+where $c$ depends on coverage probability and $\sigma_h$ is the forecast variance. 
+
+- See Table 9.8 in fpp3 for a list of $\sigma_h$ values for different ETS models.
+
+# ---- Smoothing vs. ARIMA
+
+## Two different philosophies
+
+- **Exponential smoothing (ETS)**: describe the data with a small set of
+  interpretable components -- level, trend, season -- each updated by its own
+  smoothing equation. The model is chosen by *picking a structure* (error/trend/season
+  type) that matches what you see in the data.
+
+- **ARIMA / regARIMA**: describe the *autocorrelation* of a (differenced) series
+  directly, via $p, d, q$ (and seasonal $P, D, Q$). The model is chosen by
+  *identifying orders* from ACF/PACF (or a numerical search) after making the series
+  stationary.
+
+- Both are legitimate ways to answer the same question -- "what's a good forecast for
+  $y_{T+h}$?" -- but they get there very differently, and that difference shows up in
+  when each one shines.
+
+## When smoothing methods (ETS) tend to win
+
+- **Many series to forecast quickly.** ETS has few, well-understood structural choices
+  (error/trend/season $\times$ additive/multiplicative/damped) and fits fast --
+  ideal for forecasting thousands of SKUs, store locations, or sensors at once.
+
+- **Short series.** Fewer parameters to estimate than a comparable SARIMA model, so ETS
+  can still produce sensible forecasts when there isn't enough history to reliably
+  identify ARMA orders.
+
+- **The series is dominated by level/trend/season and not much else.** If, once you
+  account for trend and season, what's left really does look like noise, there's
+  nothing for an ARMA error structure to add.
+
+- **You want a forecast, not necessarily an explanation.** ETS components (level,
+  trend, seasonal) are easy to describe to a non-technical audience; ARIMA
+  coefficients are not.
+
+- **You don't have (or don't want to build) covariates.** Both families can be
+  univariate, but ETS is *designed* to be used that way, whereas the regARIMA approach
+  from the previous lectures assumes you're supplying meaningful regressors.
+
+## When ARIMA-based methods tend to win
+
+- **The data show genuine, structured autocorrelation beyond level/trend/season.**
+  ARIMA's whole purpose is modeling that dependence explicitly (recall the AR/MA
+  ACF-PACF signatures from 05a) -- ETS has no mechanism for it.
+
+- **You need to incorporate covariates/regressors.** regARIMA (06-regARIMA) lets you
+  combine a mean-structure regression with an explicitly modeled ARMA error process;
+  ETS does not have a clean regression-with-correlated-errors analogue.
+
+- **You want principled, likelihood-based model comparison.** AICc-based comparison of
+  candidate $(p,d,q)(P,D,Q)_m$ specifications, plus Ljung-Box diagnostics, gives a
+  rigorous framework for defending *why* one model beats another (05a's whole
+  workflow). ETS model selection is comparatively coarser (choose among $\sim$30
+  error/trend/season combinations).
+
+- **Long, information-rich series where you can afford careful modeling.** Identifying
+  ARMA orders, checking residuals, and refitting is more labor-intensive per series --
+  worth it when getting one series right really matters.
+
+- **You need a fully specified stochastic (not just point-forecast) model** -- e.g.
+  for simulation, spectral analysis, or downstream statistical inference that depends
+  on the assumed data-generating process.
+
+## Pros and cons at a glance
+
+| | **Smoothing (ETS)** | **ARIMA / regARIMA** |
+|---|---|---|
+| **Interpretability** | High -- level/trend/season components | Lower -- AR/MA coefficients are less intuitive |
+| **Speed / automation at scale** | Fast, few structural choices, easy to batch | Slower -- identification + diagnostics per series |
+| **Handles non-integer/complex seasonality** | Limited (needs integer $m$; struggles with multiple seasonalities without extensions) | Same integer-$m$ limitation, but Fourier terms in the regression part sidestep it (05a/06) |
+| **Covariates / exogenous regressors** | Not native to the framework | Natural via regARIMA (`xreg`, `ARIMA(y ~ x + pdq())`) |
+| **Captures short-term serial correlation beyond trend/season** | No explicit mechanism | Yes -- that's the point of the ARMA error |
+| **Data requirements** | Works reasonably well on short series | Needs more data to reliably identify orders, especially seasonal ones |
+| **Model selection rigor** | Coarse (choose among ETS structures via AICc) | Fine-grained (search over $p,q,P,Q$ via AICc + residual diagnostics) |
+| **Risk of overfitting** | Lower (few parameters) | Higher with unconstrained grid/`auto.arima` searches -- always check residuals, not just AICc |
+
+## Practical guidance
+
+1. **Plot the data first**, regardless of which family you're leaning toward -- trend,
+   seasonality, and obvious anomalies should drive the choice, not habit.
+2. If you mainly need **trend + seasonal extrapolation** for **many series, fast** --
+   start with **ETS**.
+3. If residuals from a simple mean-structure regression (or from an ETS fit) still show
+   **clear autocorrelation**, or you have **covariates** you want to use properly --
+   move to **ARIMA / regARIMA**.
+4. In practice, **fit both and compare** out-of-sample (e.g. rolling-origin CV from
+   05a) -- `fable` makes this nearly free, since `ETS()` and `ARIMA()` share the same
+   `model()`/`forecast()`/`accuracy()` interface.
+5. Remember: **AICc is not comparable between ETS and ARIMA models fit to different
+   representations of the data** (e.g. levels vs. differences) -- always validate the
+   final choice with residual diagnostics and/or cross-validated forecast accuracy, not
+   information criteria alone.
+
+
+
+
+
