@@ -1,0 +1,649 @@
+---
+title: "Homework 2"
+subtitle: "UB Time Series -- Fall 2026"
+author: "Emily Fagerstrom"
+date: today
+format:
+  html:
+    embed-resources: true
+    toc: true
+    toc-depth: 3
+    code-fold: false
+    fig-width: 8
+    fig-height: 4.5
+    theme: cosmo
+  gfm:
+    toc: true
+execute:
+  echo: true
+  warning: false
+  message: false
+  cache: true
+---
+
+## Overview
+
+
+```{r}
+#| label: setup
+library(readr)
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(forecast)
+library(tseries)
+library(scales)
+library(zoo)
+
+theme_set(theme_minimal(base_size = 11))
+```
+
+## Step 1: Load current FRED data
+
+```{r}
+#| eval: false
+
+fred_url <- "https://fred.stlouisfed.org/graph/fredgraph.csv?id=ICNSA"
+icnsa_raw <- read.csv(fred_url)
+write.csv(icnsa_raw, "fagerstromData/ICNSA.csv",row.names=FALSE)
+
+fred_url <- "https://fred.stlouisfed.org/graph/fredgraph.csv?id=GASREGW"
+gas_raw <- read.csv(fred_url)
+write.csv(gas_raw, "fagerstromData/GAS.csv",row.names=FALSE)
+
+fred_url <- "https://fred.stlouisfed.org/graph/fredgraph.csv?id=CPIAUCNS"
+inflation_raw <- read.csv(fred_url)
+write.csv(inflation_raw, "fagerstromData/INFLATION.csv",row.names=FALSE)
+
+rm(icnsa_raw)  #so I know how it would work for someone else
+rm(gas_raw)
+rm(inflation_raw)
+rm(fred_url)
+
+# if this part of the code is rerun, things will be different if data is downloaded between Thurs and Monday vs between Monday and Thurs
+# yes... I should do this better where I line up dates or something
+```
+
+For reproducability the data is stored in `fagerstromData/ICNSA.csv`.
+
+```{r}
+#| label: load
+icnsa <- read_csv("FagerstromData/ICNSA.csv", show_col_types = FALSE) |>
+  rename(date = observation_date, icnsa = ICNSA) |>
+  arrange(date)
+
+gas <- read_csv("fagerstromData/GAS.csv", show_col_types = FALSE) |>
+  rename(date = observation_date, gas = GASREGW) |>
+  arrange(date)
+
+infl <- read_csv("FagerstromData/INFLATION.csv", show_col_types = FALSE) |>
+  rename(date = observation_date, cpi = CPIAUCNS) |>
+  arrange(date)
+
+```
+
+## Step 2: Covariates
+
+**Pick one or more covariates for a regression model of ICNSA (e.g. trend, seasonal dummies/harmonics, holiday effects, a COVID indicator, or an external series such as one you may have used in HW1). Justify your choice using visual evidence — plots of ICNSA and candidate covariates over time, scatterplots, and/or cross-correlation (CCF) plots.**
+
+
+Thought process on gas impacting icnsa: link is probably pretty tenuous (more theoretical than anything).  But as I understand it, high gas prices can make shipping goods around the country more expensive, which in turn (with a lag) hurts businesses and could prompt layoffs.  So I'm expecting info about gas a few months ago to (slightly) impact claims now.
+
+Thought process on inflation: Gas prices probably need to be inflation-adjusted.  Inflation is given monthly.  I could just map a gas price to that particular months's CPI, but that would introduce some "step function" behavior each month.  So maybe could try doing an interpolation function on the inflation data, and then use the interpolated data to adjust the gas prices.
+
+I only have gas prices starting in 1990, so I'm subsetting all the data starting then.
+Thus I will have one extra data point from gas, so I'm removing it for now.
+
+Second covariate will be a covid dummy variable.
+
+Finally, I have learned something about how interpolate works.  It only functions *within* the data.  So what has been happening is that my "head" and "tail" gas prices are NA, because cpi is monthly and gas is weekly, and the cpi doesn't get interpolated past the endpoints.  I thought I fixed it by grabbing inflation starting Aug 1, But I've still got "tail" issues. SO!  I'm using "rule 2" here.
+
+Finally finally, I'm redoing everything with taking logs of everything.  I'm not confident why I would do that with gas prices (since they are already inflation adjusted), but from what I've read... it is the more correct thing to do?  But then I broke other things.  
+
+```{r}
+gas <- gas %>% filter(as.Date(date) >= "1990-08-20")
+icnsa <- icnsa %>% filter(as.Date(date) >= "1990-08-20")
+infl <- infl %>% filter(as.Date(date) >= "1990-08-01")
+
+
+# Linearly interpolate the cpi:
+full_daily_dates <- data.frame(date = seq(min(infl$date), max(gas$date), by = "day"))
+infl_daily <- full_daily_dates %>%
+  left_join(infl, by = "date")
+infl_daily$infl_interpolated <- na.approx(infl_daily$cpi,rule = 2)
+
+#### YES I AM SERIOUS ABOUT max(gas$date) instead of max(infl$date)
+
+# Multiplier for inflation numbers
+today_cpi <- tail(infl$cpi,1)
+infl_daily$multiplier <- today_cpi / infl_daily$infl_interpolated
+
+# Gas Price in current 2026 dollars:
+gas <- gas %>%
+  left_join(infl_daily %>% select(date, multiplier), by = "date")
+
+gas$gas <- (gas$gas / gas$multiplier)
+
+rm(full_daily_dates,infl,infl_daily,today_cpi)
+gas$multiplier <- NULL
+
+
+############## TAKING LOGS!!!!
+#but could also comment this back out!!!
+#gas$gas <- log(gas$gas)
+#icnsa$icnsa <- log(icnsa$icnsa)
+# yep! commented right back out
+
+
+
+##### last gas price; save for next prediction
+last_gas_price <- tail(gas,1)
+gas <- gas[-nrow(gas), ] #the latest gas price; use in prediction, but drop otherwise
+```
+
+```{r}
+ccf(gas$gas, icnsa$icnsa, lag.max = 26, 
+    na.action = na.pass,
+    main = "Cross-Correlation: Real Gas vs. Initial Claims",
+    xlab = "Lag (Weeks)", ylab = "CCF")
+
+```
+
+Ok. So I am dead wrong.  High unemployment claims go with low gas prices and vice versa.  And I expected to see some kind of strong lag, (like 2 months ago gas tells something about unemployment now), but the largest (most negative) is at lag 2 (only 2 weeks).
+
+## Step 3: Naive OLS
+
+Since gas prices at 0 aren't that different (as far as their correlation with icnsa) from gas prices at 2 (2 weeks difference), I'm going to do the naive OLS without a lag.  Also, gas data comes out on Monday; ICNSA comes out Thursday.  I'm just mishmashing the two time series together.
+
+Also, the gas series is missing 12 entries.  So going to interpolate those.
+
+Finally, my covid dummy variable is from March 14, 2020 to December 14, 2020.  March 14 was my own last day of work.  December 14 is, according to Wikipedia, when the first mass vaccinations start happening.
+
+```{r}
+#| label: OLS
+ 
+ols_data <- icnsa
+ols_data$gas <- gas$gas
+ols_data$gas <- na.approx(ols_data$gas, na.rm = FALSE)
+ols_data$covid <- ifelse(ols_data$date >= as.Date("2020-03-14") & 
+                         ols_data$date <= as.Date("2020-12-14"), 1, 0)
+
+ols_model <- lm(icnsa ~ gas + covid, data = ols_data)
+
+ols_residuals <- residuals(ols_model)
+tsdisplay(ols_residuals, main = "Diagnostics of OLS Residuals")
+```
+
+PCF cuts off; ACF does not.  We expect p=2 and q=0.
+ACF seems high for awhile, try d=1.
+
+Also, interesting.  I tried this with and without taking logs.  With logs, ACF just stays positive.  Without first taking logs, you can see the seasonality a bit more (positive near 0, negative near 26, positive near 52)
+
+
+Seems to indicate AR is appropriate, with p=2 (q=0)
+Should also see seasonal effect.
+
+
+```{r}
+acf(ols_residuals, lag.max = 104)
+
+rm(ols_model,ols_residuals)
+```
+
+I realize I am not actually clear on what I'm looking at.  The LLMs tell me I should probably consider this as D=0, P=1, but I'm not sure why.
+
+
+
+## Step 4: Manual ARIMA
+
+I redid everything with logs.  Then I broke manual ARIMA.  [Wound up with an error message Error in optim(init[mask], armafn, method = optim.method, hessian = TRUE,  : 
+  initial value in 'vmmin' is not finite ]  I don't seem to have any Inf's or Nan's anywhere though. So went back and removed the logs.
+
+
+```{r}
+#| label: ARIMA
+
+covariates <- as.matrix(ols_data[,c("gas","covid")])
+sum(is.na(covariates))
+
+manual_model <- Arima(ols_data$icnsa, 
+                      order = c(2, 1, 0), 
+                      seasonal = list(order = c(1, 0, 0), period = 52),
+                      xreg = covariates
+                      )
+
+summary(manual_model)
+
+
+
+```
+
+Considerations:
+
+coefficients are much larger than corresponding s.e.'s, so good indication that they might be significant
+
+AIC (AICc, BIC) to compare to other models
+
+ACF1 close to 0, so "remainder" is "close" to white noise
+
+
+## Step 5. Numerical Search
+
+```{r}
+
+auto_model <- auto.arima(ols_data$icnsa, 
+                         xreg = covariates,
+                         stepwise = FALSE,      
+                         approximation = FALSE)
+
+summary(auto_model)
+
+```
+
+## Step 6. Model Comparison
+
+Result was ARIMA(2,0,3).  That is, no seasonal component. (What???)
+AIC and BIC of the auto model was worse.
+
+
+```{r}
+checkresiduals(manual_model)
+checkresiduals(auto_model)
+
+```
+
+Ljung-Box test done on the manually-selected model gave a super tiny p-value. 
+
+Ljung-Box test done on the numerically-found model had a p-value above .05.
+
+So... for the manual model, reject the null hypothesis that the residuals are white noise.
+
+Looking at the ACF, the manual model has some noteworthy spikes at 5 and 6, so those were missed.  The auto model ACF has a noteworthy spike at 26, which is probably the seasonality it is missing?  But I guess Ljung-Box only checks for problems in the first 10?  So you have to override it (for seasonal stuff), and explicitly check out to a period.
+
+```{r}
+checkresiduals(auto_model, lag = 52)
+
+```
+
+Ok so now there is a tiny p-value for the auto-chosen ARIMA(2,0,3).
+
+So the auto-model didn't include seasonality and wasn't penalized for it because the period (52 weeks) was too long.
+
+
+## Step 5b. Numerical Search, again
+
+```{r}
+
+# Initialize tracking variables for the grid search
+best_aicc <- Inf
+best_model <- NULL
+best_params <- NULL
+
+# Define the search grid (e.g., p and q from 0 to 2, P and Q from 0 to 1)
+for(p in 0:2) {
+  for(q in 0:2) {
+    for(P in 0:1) {
+      for(Q in 0:1) {
+        # Use try() so the loop doesn't crash if an optimizer fails to converge
+        try({
+          fit <- Arima(ols_data$icnsa, 
+                       order = c(p, 1, q), 
+                       seasonal = list(order = c(P, 0, Q), period = 52),
+                       xreg = covariates,
+                       method = "ML")
+          
+          # Check if this model has a lower AICc than our current best
+          if(!is.null(fit$aicc) && fit$aicc < best_aicc) {
+            best_aicc <- fit$aicc
+            best_model <- fit
+            best_params <- c(p = p, d = 1, q = q, P = P, D = 0, Q = Q)
+          }
+        }, silent = TRUE)
+      }
+    }
+  }
+}
+
+# Print the winning parameters and AICc
+print("Optimal Parameters Found by Grid Search:")
+print(best_params)
+print(paste("Best AICc:", best_aicc))
+
+# View summary and run the strict 52-lag diagnostic test on the winner
+summary(best_model)
+checkresiduals(best_model, lag = 52)
+
+```
+
+Ok.  Still failed Ljung-Box test.  And my laptop was not particularly happy to run that block.  But one more attempt.  (Also, I wanted to throw the Ljung-Box test inside the loop... only keep potential ones that pass. But I suppose that is illegal/p-hacking)
+
+Also... nope.  Laptop not happy on this one.  I stopped it, so we're going with whatever was "best" when I stopped it.  At the time it was ARIMA(1,1,3)(1,1,1).
+Ljung-Box still failed.
+
+```{r}
+#| eval: false
+
+best_aicc <- Inf
+best_model <- NULL
+best_params <- NULL
+
+for(p in 0:3) {
+  for(d in 0:1) {
+    for(q in 0:3) {
+      for(P in 0:1) {
+        for(D in 0:1) {        # Now testing seasonal differencing 0 and 1
+          for(Q in 0:1) {      # Now testing seasonal MA 0 and 1
+            try({
+              fit <- Arima(ols_data$icnsa, 
+                           order = c(p, d, q), 
+                           seasonal = list(order = c(P, D, Q), period = 52),
+                           xreg = covariates,
+                           method = "ML")
+              
+              if(!is.null(fit$aicc) && fit$aicc < best_aicc) {
+                best_aicc <- fit$aicc
+                best_model <- fit
+                best_params <- c(p = p, d = d, q = q, P = P, D = D, Q = Q)
+              }
+            }, silent = TRUE)
+          }
+        }
+      }
+    }
+  }
+}
+
+print("Ultimate Grid Search Winner:")
+print(best_params)
+print(paste("Best AICc:", best_aicc))
+
+summary(best_model)
+checkresiduals(best_model, lag = 52)
+
+
+```
+
+## Step 7. This week's prediction
+
+Going with the manual model.
+
+```{r}
+next_gas <- last_gas_price$gas  
+next_covid <- 0         
+
+future_xreg <- matrix(c(next_gas, next_covid), nrow = 1, ncol = 2)
+colnames(future_xreg) <- c("gas", "covid")
+
+next_week_forecast <- forecast(manual_model, xreg = future_xreg, h = 1)
+
+print(next_week_forecast)
+
+predicted_claims <- next_week_forecast$mean[1]
+print(paste("Predicted Initial Claims for Next Week:", predicted_claims))
+
+rm(list = ls())
+```
+
+
+# Problem 2
+
+
+```{r}
+#| eval: false
+
+fred_url <- "https://fred.stlouisfed.org/graph/fredgraph.csv?id=MRTSSM4453USN"
+booze_raw <- read.csv(fred_url)
+write.csv(booze_raw, "fagerstromData/booze.csv",row.names=FALSE)
+
+rm(booze_raw)
+rm(fred_url)
+```
+
+```{r}
+
+booze <- read_csv("FagerstromData/booze.csv", show_col_types = FALSE) |>
+  rename(date = observation_date, booze = MRTSSM4453USN) |>
+  arrange(date)
+
+
+```
+
+
+## Step 1: Plotting
+
+```{r}
+
+library(fpp3)
+library(tidyverse)
+library(tsbox)
+library(astsa)
+
+
+booze |> 
+  select(time = date, booze) |>
+  ts_dygraphs()
+
+```
+
+Some things:
+
+Variance seems to be increasing (so want a log)
+
+Seasonality
+
+Discontinuity at 2020 (and don't immediately see it "return to the mean" like it seemed to with unemployment)
+
+Mostly upward trend but that has changed in the last few years
+
+Maybe... trend really is reversing, or alternatively, almost looks like habits changed over covid, then those new habits persisted, and maybe we're almost back now to "what would have been" without covid?
+
+
+## Step 2. Choose / justify covariates
+
+Going to try two covid dummy variables.  One is as before.  The other is before/after March 2020.  Because it looks like some habits persisted.
+
+It's seasonal, sure. But basically the huge spike is December.  So I'm throwing in a "December" dummy variable.
+
+```{r}
+sum(is.na(booze$booze))
+
+booze$covid <- ifelse(booze$date >= as.Date("2020-03-14") & 
+                         booze$date <= as.Date("2020-12-14"), 1, 0)
+
+booze$longcovid <- ifelse(booze$date >= as.Date("2020-03-14"), 1, 0)
+
+booze$dec <- ifelse(format(booze$date, "%m") == "12", 1, 0)
+
+booze$booze <- log(booze$booze)
+
+```
+
+
+```{r}
+
+
+ols_model <- lm(booze ~ covid + longcovid + dec, data = booze)
+
+ols_residuals <- residuals(ols_model)
+tsdisplay(ols_residuals, main = "Diagnostics of OLS Residuals")
+
+summary(ols_model)
+
+
+```
+
+
+The covid variable doesn't seem to help at all, just the longcovid one.  (before vs after).  December is significant.  Persistently large ACF, so we want to try d=1.  Large negative spike in PACF, so need to include seasonality, which makes sense.
+
+
+
+## Step 3. Model attempt
+
+```{r}
+
+covariates <- as.matrix(booze[, c("longcovid", "dec")])
+
+# order = c(1, 1, 1) to handle the persistent ACF
+# seasonal = list(order = c(1, 0, 0), period = 12) to catch lag-12 PACF spike
+monthly_arima <- Arima(booze$booze, 
+                       order = c(1, 1, 1), 
+                       seasonal = list(order = c(1, 0, 0), period = 12),
+                       xreg = covariates,
+                       method = "ML")
+
+summary(monthly_arima)
+checkresiduals(monthly_arima, lag = 24)
+
+```
+
+
+Some problems:
+
+Ljung-Box test failed.
+
+sar1 coefficient is close to 1.  So need D=1.
+
+Apparently differencing "ruined" the longcovid covariate.  Would not have thought of this. (not ruined exactly, but all the 1s that indicated "aftermath" have differenced to 0.)
+
+Ok actually just kidding.  I guess D=1 "broke" some things... too much differencing?
+
+still have the sar1 near 1 problem
+
+```{r}
+
+manual_tweaked <- Arima(booze$booze, 
+                        order = c(1, 1, 2),   # Expanded MA to handle intermediate lags
+                        seasonal = list(order = c(1, 0, 1), period = 12), # Seasonal diff + seasonal MA
+                        xreg = covariates,
+                        method = "ML")
+
+summary(manual_tweaked)
+
+# Check the new residual diagnostics
+checkresiduals(manual_tweaked, lag = 24)
+
+
+```
+
+```{r}
+
+manual_model <- Arima(booze$booze, 
+                order = c(0, 1, 2),                  # Short-term MA(2)
+                seasonal = list(order = c(0, 0, 1), period = 12), # Pure Seasonal MA(1)
+                xreg = covariates,
+                method = "ML")
+
+summary(manual_model)
+checkresiduals(manual_model, lag = 24)
+
+```
+## Step 4. Numerical search
+
+```{r}
+
+auto_model <- auto.arima(booze$booze, 
+                         xreg = covariates,
+                         stepwise = FALSE,      
+                         approximation = FALSE)
+
+summary(auto_model)
+
+checkresiduals(auto_model, lag = 24)
+
+```
+
+
+As in the previous example, the numerical search didn't produce a seasonal component.  ARIMEA(2,1,2).  Want to "force" a seasonality of 12.
+
+```{r}
+
+auto_model <- auto.arima(booze$booze, 
+              xreg = covariates,
+              stepwise = FALSE,       # Search a wider model space
+              approximation = FALSE,  # Use exact maximum likelihood for AIC selection
+              trace = TRUE)           # Prints the models it tries to your console
+
+summary(auto_model)
+
+checkresiduals(auto_model, lag = 12)
+
+```
+Ok so this worked terribly. (No seasonality, and the Ljung-Box test not good.)
+But I guess by using "booze$booze" I maybe messed up the "time-series-ness" of the object.  Which makes me wonder if I did that on problem 1 as well.
+
+```{r}
+booze_ts <- ts(booze$booze, start = c(2010, 1), frequency = 12)
+
+# 2. Ensure your regressors match and are matrices/ts objects
+retail_xreg <- as.matrix(booze[, c("longcovid", "dec")])
+
+# 3. Run auto.arima with the formal time-series object
+auto_seasonal_model <- auto.arima(booze_ts, 
+                                    xreg = retail_xreg,
+                                    stepwise = FALSE,       
+                                    approximation = FALSE,  
+                                    trace = TRUE)           
+
+# 4. Check the new winner
+summary(auto_seasonal_model)
+checkresiduals(auto_seasonal_model, lag = 24)
+
+
+```
+Gah! still failing Ljung-Box.  And sar1 back near 1 again.  Disaster.
+
+## Another model attempt
+
+
+```{r}
+model <- Arima(booze_ts, 
+        order = c(0, 1, 2),                  # Pure short-term MA(2)
+        seasonal = list(order = c(1, 0, 1), period = 12), # Seasonal AR(1) + MA(1)
+        xreg = covariates,
+        method = "ML")
+
+summary(model)
+checkresiduals(model, lag = 24)
+
+```
+Ljung-Box is the worst. :(
+
+
+## Prediction
+
+```{r}
+# booze data up through July; need Aug through Dec 2026, for the "future"
+future_xreg <- matrix(c(
+  1, 0,  # August 2026: longcovid = 1, dec = 0
+  1, 0,  # September 2026
+  1, 0,  # October 2026
+  1, 0,  # November 2026
+  1, 1   # December 2026: longcovid = 1, dec = 1
+), ncol = 2, byrow = TRUE)
+
+colnames(future_xreg) <- c("longcovid", "dec")
+
+fc <- forecast(model, h = 5, xreg = future_xreg)
+
+print(fc)
+
+
+# this was log-ed at the beginning, so need to take an exp
+print(exp(fc$mean))
+
+
+```
+
+
+
+
+
+SO: 
+
+Dec 2026 sales prediction: 8041.277
+
+
+AND
+
+icnsa prediction:  116350.27281023
+
