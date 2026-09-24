@@ -35,7 +35,7 @@ knitr::opts_chunk$set(
 )
 ```
 
-# ---- The Model
+# ---- The Model Setup
 
 ## Setup
 
