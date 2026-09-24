@@ -566,9 +566,7 @@ y_t =
 T_{t} \\ S_{t} \\ S_{t-1} \\ S_{t-2}
 \end{pmatrix}
 + 
-\begin{pmatrix}
-v_{t, 1} \\ v_{t, 2} \\ 0 \\ 0
-\end{pmatrix}
+v_t
 $$
 
 ## Trend and seasonal in SSF {.smaller}
