@@ -1,0 +1,431 @@
+---
+title: "2026 Time Series"
+author: "08b-statespaceapplications"
+format: revealjs
+editor: source
+toc: true
+toc-depth: 1
+slide-number: true
+smaller: false
+scrollable: true
+editor_options:
+  chunk_output_type: console
+---
+
+```{r, include=FALSE}
+library(forecast)
+library(fpp3)
+library(tidyverse)
+library(tsbox)
+library(zoo)
+library(seasonal)
+library(astsa)
+library(patchwork)
+library(tseries)
+library(fredr)
+```
+
+```{r setup, include=FALSE}
+# Set up chunk for all slides
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  cache = TRUE,
+  dev.args = list(pointsize = 11)
+)
+```
+
+# ---- Recap
+
+## Where we are
+
+- **08-statespace** introduced the general state space model (state + observation
+  equations), the Kalman filter (prediction, innovation, update) and smoother
+
+- Here we look at **three more applications**
+
+- We finish with overall guidance on **when** to reach for a state space model versus
+  ARIMA (05a/06) or exponential smoothing (07).
+
+# ---- Application 1: Missing Data
+
+## The data: `astsa::ar1miss`
+
+- From Shumway & Stoffer, Chapter 6: a simulated AR(1) with $\phi = 0.9$,
+  $\sigma_w = 1$, $n = 100$.
+
+- About 15% of the values are missing completely at random -- a much smaller, cleaner
+  missing-data problem than the bone-marrow-transplant example from 08-statespace, so
+  we can fit it live here.
+
+```{r}
+#| output-location: slide
+data(ar1miss)
+tsplot(ar1miss, type = 'o', col = 4, pch = 19, main = "AR(1) with ~15% missing")
+```
+
+## Setting up the model
+
+- State: AR(1), $x_t = \phi x_{t-1} + w_t$
+
+- Observation: $y_t = x_t + v_t$, **except** at missing times, where there is no
+  observation at all.
+
+- $A_t = I$ if observed, $0$ if missing.  $A_t$ is a scalar, so it is just 1 or 0.
+
+```{r}
+y   <- ar1miss
+num <- length(y)
+A   <- rep(1, num)
+A[is.na(y)] <- 0
+sum(A == 0)   # number of missing observations
+```
+
+## MLE via the Kalman filter
+
+```{r}
+Linn <- function(para) {
+  phi  <- para[1]; sigw <- para[2]; sigv <- para[3]
+  Sigma0 <- (sigw^2) / (1 - phi^2)
+  kf <- Kfilter(y, A = A, mu0 = 0, Sigma0 = Sigma0, Phi = phi, sQ = sigw, sR = sigv)
+  kf$like
+}
+init.par <- c(phi = .3, sigw = 1, sigv = 1)
+est <- optim(init.par, Linn, method = "BFGS", hessian = TRUE)
+SE  <- sqrt(diag(solve(est$hessian)))
+cbind(estimate = est$par, SE)
+```
+
+- $\hat\phi \approx 0.77$ and $\hat\sigma_w \approx 1.10$ -- true $\phi = 0.9,\ \sigma_w = 1$, despite 15 missing points.
+
+- $\hat\sigma_v \approx 0$: the fit correctly recognizes there is no *separate*
+  observation noise here -- missingness, not measurement error, is the only
+  complication in this series.
+
+## Smoothing to fill in missing values
+
+```{r}
+#| output-location: slide
+phi <- est$par[1]; sigw <- est$par[2]; sigv <- est$par[3]
+Sigma0 <- (sigw^2) / (1 - phi^2)
+ks <- Ksmooth(y, A = A, mu0 = 0, Sigma0 = Sigma0, Phi = phi, sQ = sigw, sR = sigv)
+xs <- ts(as.vector(ks$Xs))
+
+tsplot(y, type = 'o', col = 4, pch = 19, main = "Observed (points) vs. smoothed (line)")
+lines(xs, col = 6, lwd = 2)
+points(time(y)[is.na(y)], xs[is.na(y)], col = 2, pch = 19)
+legend("topright", legend = c("observed", "smoothed", "imputed (was missing)"),
+       col = c(4, 6, 2), pch = c(19, NA, 19), lty = c(NA, 1, NA))
+```
+
+# ---- Application 2: A Monthly FRED Series
+
+## US Unemployment Rate (`UNRATE`)
+
+- Pulled live from FRED with `fredr`, the same way as the Homework 2 solution. 
+
+```{r, echo=FALSE}
+fredr_set_key("052142bc981666b4ebcb1c8df98d006b")
+```
+
+```{r}
+dat <- fredr(series_id = "UNRATE") |> select(time = date, value) |> ts_ts()
+dat <- window(dat, start = c(2000, 1))
+y   <- as.numeric(dat)
+num <- length(y)
+cat("Missing months in this window:", sum(is.na(y)), "\n")
+which(is.na(y))
+```
+
+- FRED shows **one `NA`** (Oct 2025) -- BLS didn't publish that release on the normal
+  schedule. Missing values, even from an official government source.
+
+## A local linear trend model
+
+- This is precisely **Holt's linear trend method** (07-smoothing) written as a state
+  space model, with a level $\ell_t$ and a slope $b_t$
+
+$$
+\ell_t = \ell_{t-1} + b_{t-1} + w_{1,t}, \\
+b_t = b_{t-1} + w_{2,t}, \\
+y_t = \ell_t + v_t
+$$
+
+```{r}
+Phi <- matrix(c(1, 0, 1, 1), 2, 2)     # level, slope
+A   <- array(rep(matrix(c(1, 0), 1, 2), num), dim = c(1, 2, num))
+A[, , is.na(y)] <- 0                    # zero out the missing month
+```
+
+## Fit and smooth
+
+```{r}
+Linn <- function(para) {
+  sQ  <- diag(c(para[1], para[2]))
+  mu0 <- matrix(c(y[1], 0), 2, 1); Sigma0 <- diag(c(1, 1))
+  kf  <- Kfilter(y, A, mu0, Sigma0, Phi, sQ, para[3])
+  kf$like
+}
+est <- optim(c(.1, .1, .1), Linn, method = "BFGS", hessian = TRUE)
+cbind(estimate = est$par, SE = sqrt(diag(solve(est$hessian))))
+```
+
+- The estimated slope-noise and observation-noise variances both are near **zero**
+- Model indicates the published rate has little separate measurement error, and its
+  trend doesn't need its own random variance beyond what the level already captures 
+
+## Level, slope, and the imputed month
+
+```{r}
+#| output-location: slide
+sQ  <- diag(est$par[1:2]); sR <- est$par[3]
+mu0 <- matrix(c(y[1], 0), 2, 1); Sigma0 <- diag(c(1, 1))
+ks  <- Ksmooth(y, A, mu0, Sigma0, Phi, sQ, sR)
+level_sm <- ts(ks$Xs[1, , ], start = start(dat), frequency = 12)
+
+tsplot(dat, type = 'o', col = 8, pch = 19, cex = .4, ylab = "Unemployment rate (%)",
+       main = "UNRATE: smoothed level, 2000-present")
+lines(level_sm, col = 4, lwd = 2)
+legend("topright", legend = c("observed", "smoothed level"), col = c(8, 4), lwd = c(1, 2))
+```
+
+- The gap at Oct 2025 is filled in at `r round(level_sm[which(is.na(y))], 2)`%, right
+  between the neighboring Sep/Nov values
+
+# ---- Application 3A: Object Tracking (Simulated)
+
+## A completely different domain
+
+- State space models were **invented** for this kind of problem -- Kalman's original
+  1960 paper targeted the Apollo guidance computer, and the same idea still runs GPS
+  receivers, radar tracking, and robot localization today.
+
+- Concrete picture: a ship, drone, or car is moving around on a flat map. At every
+  instant it has a true, physical location **and** a true velocity (speed + direction),
+  whether or not anyone is measuring either one.
+
+- We only ever get to **observe its position**, occasionally and with error (a GPS fix,
+  a radar return) -- velocity is never measured directly, only *inferred* from how the
+  position changes from one fix to the next.
+
+## What does the state vector represent?
+
+The state $x_t$ packages up everything needed to describe the object's motion *and*
+predict where it goes next:
+
+| Component | Meaning |
+|---|---|
+| $p^x_t$ | position, x-coordinate (e.g. longitude, or east-west distance) |
+| $v^x_t$ | velocity, x-component (how fast it's moving east-west *right now*) |
+| $p^y_t$ | position, y-coordinate (e.g. latitude, or north-south distance) |
+| $v^y_t$ | velocity, y-component (how fast it's moving north-south *right now*) |
+
+$$
+x_t = (p^x_t,\ v^x_t,\ p^y_t,\ v^y_t)'
+$$
+
+- Position alone isn't enough to *predict* the next position -- you also need to know
+  which way it's currently heading and how fast. That's exactly what the velocity
+  components add to the state.
+
+## State space formulation
+
+$$
+\begin{pmatrix} p^x_t \\ v^x_t \\ p^y_t \\ v^y_t \end{pmatrix}
+=
+\begin{bmatrix} 1&1&0&0 \\ 0&1&0&0 \\ 0&0&1&1 \\ 0&0&0&1 \end{bmatrix}
+\begin{pmatrix} p^x_{t-1} \\ v^x_{t-1} \\ p^y_{t-1} \\ v^y_{t-1} \end{pmatrix} + w_t,
+\qquad
+y_t = \begin{bmatrix} 1&0&0&0 \\ 0&0&1&0 \end{bmatrix} x_t + v_t
+$$
+
+- Row 1 says $p^x_t = p^x_{t-1} + v^x_{t-1}$: new x-position = old x-position + however
+  far it moved in the x-direction (constant-velocity motion). Row 3 is the same idea for
+  $y$. Rows 2 and 4 say velocity this period is just last period's velocity, plus noise.
+
+- $w_t$ enters mainly through velocity (random accelerations / maneuvering); $v_t$ is
+  GPS-style position noise. $A$ picks out *only* the position rows -- confirming that
+  velocity is a **purely latent** state, never directly observed.
+
+## Simulate a noisy trajectory
+
+```{r}
+#| output-location: slide
+set.seed(42)
+num <- 60
+Phi <- matrix(0, 4, 4)
+Phi[1, 1] <- 1; Phi[1, 2] <- 1
+Phi[2, 2] <- 1
+Phi[3, 3] <- 1; Phi[3, 4] <- 1
+Phi[4, 4] <- 1
+A <- matrix(0, 2, 4); A[1, 1] <- 1; A[2, 3] <- 1
+
+q_vel <- .05; r_pos <- 2
+x <- matrix(0, 4, num + 1); x[, 1] <- c(0, 1, 0, .5)
+w <- matrix(rnorm(2 * num, 0, q_vel), 2, num)
+for (t in 1:num) {
+  x[, t + 1] <- Phi %*% x[, t]
+  x[2, t + 1] <- x[2, t + 1] + w[1, t]
+  x[4, t + 1] <- x[4, t + 1] + w[2, t]
+}
+true_traj <- x[, -1]
+y <- t(A %*% true_traj) + t(matrix(rnorm(2 * num, 0, r_pos), 2, num))
+
+plot(true_traj[1, ], true_traj[3, ], type = 'l', lwd = 2,
+     xlab = "x position", ylab = "y position", main = "True path vs. noisy GPS fixes")
+points(y[, 1], y[, 2], col = 'grey50')
+legend("topleft", legend = c("true path", "noisy fix"), col = c(1, "grey50"),
+       lty = c(1, NA), pch = c(NA, 1))
+```
+
+## Filter and smooth the path
+
+```{r}
+#| output-location: slide
+sQ  <- diag(c(1e-6, q_vel, 1e-6, q_vel)); sR <- diag(c(r_pos, r_pos))
+mu0 <- c(y[1, 1], 0, y[1, 2], 0); Sigma0 <- diag(c(5, 5, 5, 5))
+ks  <- Ksmooth(y, A, mu0, Sigma0, Phi, sQ, sR)
+
+rmse_raw <- sqrt(mean((y[, 1] - true_traj[1, ])^2 + (y[, 2] - true_traj[3, ])^2))
+rmse_sm  <- sqrt(mean((ks$Xs[1, , ] - true_traj[1, ])^2 + (ks$Xs[3, , ] - true_traj[3, ])^2))
+
+plot(true_traj[1, ], true_traj[3, ], type = 'l', lwd = 2,
+     xlab = "x position", ylab = "y position", main = "True vs. Kalman-smoothed path")
+points(y[, 1], y[, 2], col = 'grey70')
+lines(ks$Xs[1, , ], ks$Xs[3, , ], col = 2, lwd = 2)
+legend("topleft", legend = c("true path", "noisy fix", "Kalman smoothed"),
+       col = c(1, "grey70", 2), lty = c(1, NA, 1), pch = c(NA, 1, NA), lwd = c(2, NA, 2))
+```
+
+- RMSE of the raw GPS fixes: `r round(rmse_raw, 2)`. RMSE of the smoothed path:
+  `r round(rmse_sm, 2)` -- a large reduction, obtained entirely by exploiting the
+  constant-velocity dynamics, with **no new measurements**.
+
+# ---- Application 3B: Object Tracking (Real Data)
+
+## Hurricane Katrina, 2005
+
+- Real "position tracking" data: NOAA's Atlantic hurricane best-track database, via
+  `dplyr::storms` -- (longitude, latitude) for the center of every named storm since
+  1975, reported every 6 hours.
+
+- Same state vector as Application 3A, just relabeled: $p^x_t, p^y_t$ are now
+  (longitude, latitude), and $v^x_t, v^y_t$ are the storm's **east-west and
+  north-south translation speed**
+  
+- Mmeteorologists care about a great deal,
+  and one that is never directly in the raw data, only in how position changes.
+
+```{r}
+data(storms)
+kat <- storms |>
+  filter(name == "Katrina", year == 2005, hour %in% c(0, 6, 12, 18)) |>
+  arrange(month, day, hour)
+nrow(kat)
+y <- cbind(kat$long, kat$lat)
+```
+
+## Fit the same model to the real track
+
+```{r}
+Phi <- matrix(0, 4, 4)
+Phi[1, 1] <- 1; Phi[1, 2] <- 1
+Phi[2, 2] <- 1
+Phi[3, 3] <- 1; Phi[3, 4] <- 1
+Phi[4, 4] <- 1
+A <- matrix(0, 2, 4); A[1, 1] <- 1; A[2, 3] <- 1
+
+Linn <- function(para) {
+  sQ  <- diag(c(1e-6, para[1], 1e-6, para[2]))
+  sR  <- diag(c(para[3], para[3]))
+  mu0 <- c(y[1, 1], y[2, 1] - y[1, 1], y[1, 2], y[2, 2] - y[1, 2])
+  Sigma0 <- diag(c(1, 1, 1, 1))
+  kf <- Kfilter(y, A, mu0, Sigma0, Phi, sQ, sR)
+  kf$like
+}
+est <- optim(c(.2, .2, .3), Linn, method = "BFGS", hessian = TRUE)
+cbind(estimate = est$par, SE = sqrt(diag(solve(est$hessian))))
+```
+
+- The fitted position "measurement noise" is essentially **zero** unlike a raw GPS
+  or radar feed, NOAA's best-track positions are already a professionally
+  post-analyzed product, so there is very little left for the Kalman filter to clean
+  up. informative finding, not a failure of the method.
+
+## The real payoff here: an unobserved quantity, recovered
+
+```{r}
+#| output-location: slide
+sQ  <- diag(c(1e-6, est$par[1], 1e-6, est$par[2]))
+sR  <- diag(c(est$par[3], est$par[3]))
+mu0 <- c(y[1, 1], y[2, 1] - y[1, 1], y[1, 2], y[2, 2] - y[1, 2])
+Sigma0 <- diag(c(1, 1, 1, 1))
+ks  <- Ksmooth(y, A, mu0, Sigma0, Phi, sQ, sR)
+
+# convert lat/long-per-6h velocity into forward speed (mph)
+km_per_deg_lon <- 111 * cos(kat$lat * pi / 180)
+vx_kmh <- ks$Xs[2, , ] * km_per_deg_lon / 6
+vy_kmh <- ks$Xs[4, , ] * 111 / 6
+speed_mph <- sqrt(vx_kmh^2 + vy_kmh^2) * 0.621371
+
+par(mfrow = c(1, 2))
+plot(y[, 1], y[, 2], type = 'o', pch = 19, col = 'grey40',
+     xlab = "Longitude", ylab = "Latitude", main = "Katrina's track")
+lines(ks$Xs[1, , ], ks$Xs[3, , ], col = 2, lwd = 2)
+
+plot(speed_mph, type = 'o', pch = 19, col = 4,
+     xlab = "6-hour step", ylab = "Forward speed (mph)",
+     main = "Latent translation speed")
+abline(v = which(kat$hour == 12 & kat$day == 29), lty = 2)  # ~ landfall
+```
+
+- Katrina crawled at roughly 6-9 mph while intensifying in the Gulf, then **accelerated
+  sharply to 20-27 mph** after landfall as it weakened and got picked up by the jet
+  stream -- a well-documented real feature of this storm.
+
+- The raw data never records "forward speed" anywhere -- it falls straight out of the
+  latent velocity components of $x_t$, exactly the same mechanism as Application 3A,
+  just extracting information instead of removing noise.
+
+# ---- Overview of State Space Models
+
+## When to use 
+
+- Both ARIMA (05a/06) and ETS / exponential smoothing (07) can be written *as* linear
+  Gaussian state space models. A state space model isn't really a competitor to those
+  methods so much as the framework that contains them.
+
+- **A genuine latent process you actually care about**, observed only indirectly and
+  with error (a temperature "signal" under land/ocean noise, an unemployment "level"
+  under reporting noise, position under GPS noise). The model separates *signal* from
+  *measurement error* explicitly.
+
+- **Missing, irregular, or multi-rate data** -- handled naturally by zeroing out $A_t$
+  at unobserved times (Applications 1-2), with no ad hoc deletion, interpolation, or
+  noise-injection needed.
+
+- **Multiple series sharing (or interacting through) a common latent structure** --
+  global temperature land/ocean, or position/velocity here -- rather than modeling each
+  series' own autocorrelation separately.
+
+- **Structural decomposition with formal uncertainty** -- trend, season, and irregular
+  components each get their own evolution equation and their own estimated
+  uncertainty, not just a point estimate.
+
+- **Real-time / online updating** -- the filter gives the best estimate "as of now" and
+  updates cheaply as each new observation arrives, without refitting from scratch
+  (tracking, monitoring, control).
+
+## Costs and honest limitations
+
+- **You do the model-building.** There is no `auto.arima()`-style automatic order
+  search for a general SSM -- you choose $\Phi, A, Q, R$ (and $\mu_0, \Sigma_0$)
+  yourself, and you are responsible for whether that choice is sensible.
+
+- **Estimation is less push-button.** Likelihood surfaces from `optim()` can be flat or
+  have boundary solutions (we saw variances estimated at $\approx 0$ twice today) --
+  reasonable starting values and sanity checks matter more here than with a
+  well-tested package default.
+
+
