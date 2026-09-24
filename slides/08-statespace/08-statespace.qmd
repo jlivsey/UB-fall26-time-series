@@ -35,11 +35,11 @@ knitr::opts_chunk$set(
 )
 ```
 
-# ---- The Model
+# ---- The Model Setup
 
 ## Setup
 
-- The observations $y_t$ depend on the value of an __unobserved__ state $x_t$. 
+- The observations $y_t$ depend on the value of an **unobserved** state $x_t$. 
 
 - We want to make inference about $x_t$
 
