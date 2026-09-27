@@ -191,9 +191,95 @@ fc_next_month <-liquor_fc[num+1]
 fc_next_year <- liquor_fc[num+12]
 
 tsplot(liquor_fc, type='o', main='Forecast', ylab='Trend (millions of $)', xlim = c(2023,tsp(liquor_fc)[2]))
-upp  = ts(y[(num+1):(num+n.ahead)]+2*rmspe, start= end(liquor_ts)+c(0,1), freq=12)
-low  = ts(y[(num+1):(num+n.ahead)]-2*rmspe, start=end(liquor_ts)+ c(0,1), freq=12)
+upp  = ts(liquor_fc[(num+1):(num+n.ahead)]+2*rmspe, start= end(liquor_ts)+c(0,1), freq=12)
+low  = ts(liquor_fc[(num+1):(num+n.ahead)]-2*rmspe, start=end(liquor_ts)+ c(0,1), freq=12)
 xx  = c(time(low), rev(time(upp)))
 yy  = c(low, rev(upp))
 polygon(xx, yy, border=8, col=gray(.5, alpha = .3))
 abline(v= time(liquor_ts)[num], lty=3)
+
+
+
+#####PART 2
+plot(liquor_ts)
+
+smoothing_1 <- smooth.spline(time(liquor_ts), liquor_ts, spar = 0.2)
+smoothing_2 <- smooth.spline(time(liquor_ts), liquor_ts)
+smoothing_3 <- smooth.spline(time(liquor_ts), liquor_ts, spar = 1.0)
+
+trend_1 <- ts(smoothing_1$y, start = start(liquor_ts), frequency = 12)
+trend_2 <- ts(smoothing_2$y, start = start(liquor_ts), frequency = 12)
+trend_3 <- ts(smoothing_3$y, start = start(liquor_ts), frequency = 12)
+
+tsplot(liquor_ts, type = "l", col = 8, pch = 19, cex = .4,
+       ylab = "Millions of $", main = "Trend estimates at three smoothing levels")
+lines(trend_1,  col = 2, lwd = 2)
+lines(trend_2, col = 4, lwd = 2)
+lines(trend_3, col = 3, lwd = 2)
+legend("topleft",
+       legend = c("data",
+                  "spar = 0.2 (choppy)",
+                  paste0("spar = ", round(smoothing_2$spar, 2), " (GCV-selected)"),
+                  "spar = 1.0 (very smooth)"),
+       col = c(8, 2, 4, 3), lwd = c(2, 2, 2, 2))
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+hw <- HoltWinters(liquor_ts, seasonal = "additive")
+
+extract_level <- function(hw_fit, full_ts) {
+  lvl <- hw_fit$fitted[, "level"]
+  ts(c(rep(NA, length(full_ts) - length(lvl)), lvl),
+     start = start(full_ts), frequency = frequency(full_ts))
+}
+
+level_hw <- extract_level(hw, liquor_ts)
+lines(level_hw, col =3, lwd=2)
+
+
+####ETS
+#convert data to a tibble
+liquor_tib <- liquor_raw |> mutate(month = yearmonth(date)) |>
+  as_tsibble(index = month) |>
+  select(month, value)
+
+ets_fits <- liquor_tib |>
+  model(
+    rough  = ETS(value ~ error("A") + trend("A", alpha = 0.8) + season("A")),
+    medium = ETS(value ~ error("A") + trend("A")               + season("A")),
+    smooth = ETS(value ~ error("A") + trend("A", alpha = 0.05) + season("A"))
+  )
+level_components <- ets_fits |>
+  components() |>                 # gives level, slope (b), season, remainder per model
+  as_tibble() |>
+  select(.model, month, level)
+
+level_wide <- level_components |>
+  pivot_wider(names_from = .model, values_from = level, names_prefix = "level_")
+ggplot() +
+  geom_line(data = liquor_tib, aes(x = month, y = value),
+            color = "grey60", linewidth = 0.3) +
+  geom_point(data = liquor_tib, aes(x = month, y = value),
+             color = "grey60", size = 0.6) +
+  geom_line(data = level_wide, aes(x = month, y = level_rough,  color = "alpha = 0.8 (choppy)"),  linewidth = 1) +
+  geom_line(data = level_wide, aes(x = month, y = level_medium, color = "MLE-optimized alpha"),    linewidth = 1) +
+  geom_line(data = level_wide, aes(x = month, y = level_smooth, color = "alpha = 0.05 (very smooth)"), linewidth = 1) +
+  labs(title = "ETS level component at three smoothing parameters",
+       y = "Millions of $", x = NULL, color = NULL) +
+  theme_minimal()
