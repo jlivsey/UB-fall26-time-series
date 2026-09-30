@@ -1,0 +1,197 @@
+```{r reprex-options, include = FALSE}
+options(
+  keep.source = TRUE,
+  crayon.enabled = FALSE,
+  reprex.current_venue = "gh"
+)
+```
+
+```{r, results = 'asis', echo = FALSE, include = file.exists('.Rprofile'), eval = file.exists('.Rprofile')}
+cat(sprintf("*Local `.Rprofile` detected at `%s`*", normalizePath(".Rprofile")))
+```
+
+---
+title: 'Time Series HW #3'
+author: "Austin Reszel"
+date: "`r Sys.Date()`"
+output: reprex::reprex_document
+knit: reprex::reprex_render
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, results='hide'}
+library(ggplot2)
+library(forecast)
+library(fpp3)
+library(tidyverse)
+library(tsbox)
+library(lubridate)
+library(reprex)
+library(zoo)
+library(tseries)
+library(seasonal)
+library(astsa)
+```
+
+# Problem 1
+
+## Part 1a
+
+First, we load in the data and examine it.
+
+```{r}
+alc_sales <- read.csv("https://fred.stlouisfed.org/graph/fredgraph.csv?id=MRTSSM4453USN",
+stringsAsFactors = FALSE) 
+alc_sales <- data.frame(time  = as.Date(alc_sales$observation_date),
+                          value = alc_sales$MRTSSM4453USN)
+alc_ts <- ts(alc_sales$value, start = c(1992, 1), frequency = 12)
+
+autoplot(alc_ts) +
+  labs(title = "Retail Sales: Beer, Wine, and Liquor Stores", x = "Time", y = "Value") +
+  theme_minimal()
+```
+
+## Part 1b
+
+To obtain the Covid window, we will examine the difference in sales from the same month in the previous year by taking a difference using lag 12. The window in which these values are abnormally high are considered the Covid window. We find the maximum change from the previous year before 2020, and then consider the Covid window any observations larger than that maximum change.
+
+```{r}
+alc_diffs <- ts(diff(alc_sales$value, lag=12), start=c(1993,1), frequency=12)
+
+autoplot(alc_diffs) +
+  labs(title = "Retail Sales: Change from Previous Year", x = "Time", y = "Value") +
+  theme_minimal()
+
+max_pre2023 <- max(window(alc_diffs, end = c(2020, 1)))
+
+covid_window <- alc_diffs > max_pre2023
+```
+
+So, the window will be considered from Feb 2020 to April 2021. We will set these observations to NA. After, we plot them and see they have been removed.
+
+```{r}
+alc_sales_nocovid <- alc_sales
+alc_sales_nocovid$value[alc_sales_nocovid$time >= '2020-02-01' & alc_sales_nocovid$time <= '2021-04-01'] <- NA
+alc_ts_nocovid <- ts(alc_sales_nocovid$value,start=c(1992,1), frequency=12 )
+ly <- log(alc_ts_nocovid)
+
+autoplot(alc_ts_nocovid) +
+  labs(title = "Retail Sales: Covid Removed", x = "Time", y = "Value") +
+  theme_minimal()
+```
+## Part 1c
+
+The structural state space model can be written as: $$T_t = \phi T_{t-1} + w_{1,t}$$ $$S_t +S_{t-1}+...+S_{t-11}=w_{t,2}$$ Then given the overall model as $y_t=T_t+S_t+\nu_t$, we can write the observation equation as $$y_t =\begin{pmatrix} 1 & 1 & 0 & 
+\cdots & 0 \end{pmatrix}\begin{pmatrix} T_t \\ S_t \\ S_{t-1} \\ \cdots \\ S_{t-10} \end{pmatrix} + v_t $$ and the state equation as $$
+\begin{pmatrix}
+T_t \\
+S_t \\
+S_{t-1} \\
+... \\
+S_{t-10}
+\end{pmatrix}
+=
+\begin{bmatrix}
+\phi & 0 & \cdots & 0 \\
+0 & -1 & \cdots & -1 \\
+0 & 1 & 0 \cdots & 0 \\
+\vdots & \vdots & \vdots & \vdots \\
+0 \cdots & 0 & 1 & 0
+\end{bmatrix}
+\begin{pmatrix}
+T_{t-1} \\
+S_{t-1} \\
+\vdots \\
+S_{t-11}
+\end{pmatrix}
++
+\begin{pmatrix}
+w_{t,1} \\
+w_{t,2} \\
+0 \\
+\vdots \\
+0
+\end{pmatrix} $$
+
+## Part 1d
+
+Here we fit the model.
+
+```{r}
+num <- length(ly)
+A <- matrix(c(1, 1, rep(0,10)), nrow=1)
+A2   <- array(rep(A, num), dim = c(1, 12, num))
+A2[, , is.na(alc_ts_nocovid)] <- 0   
+
+Linn = function(para){
+ Phi = diag(0,12) 
+ Phi[1,1] = para[1] 
+ Phi[2,]=c(0,rep(-1,11));
+ for (i in rep(3:12)){
+   Phi[i,i-1] = 1
+ }
+ sQ1 = para[2]; sQ2 = para[3] 
+ sQ  = diag(0,12); sQ[1,1]=sQ1; sQ[2,2]=sQ2
+ sR = para[4] 
+ kf = Kfilter(ly, A2, mu0, Sigma0, Phi, sQ, sR)
+ return(kf$like)  
+}
+
+first <- ly[1:12]
+m0 <- mean(first, na.rm = TRUE)
+s  <- first - m0; s <- s - mean(s)
+mu0    <- matrix(c(m0, s[12], s[11:2]), ncol = 1)
+Sigma0 <- diag(var(ly, na.rm = TRUE), 12)
+init.par <- c(0.99, 0.02, 0.02, 0.05)
+est <- optim(init.par, Linn, method = "L-BFGS-B",
+             lower = c(0.5, 1e-4, 1e-4, 1e-4),
+             upper = c(1, Inf, Inf, Inf), hessian = TRUE)
+
+SE  = sqrt(diag(solve(est$hessian)))
+u   = cbind(estimate = est$par, SE)
+rownames(u) = c("Phi11", "sigw1", "sigw2", "sigv")
+u
+```
+
+
+```{r}
+Phi = diag(0,12) 
+Phi[1,1] = est$par[1] 
+Phi[2,]=c(0,rep(-1,11));
+for (i in rep(3:12)){
+   Phi[i,i-1] = 1
+ }
+sQ       = diag(0,12)
+sQ[1,1]  = est$par[2]
+sQ[2,2]  = est$par[3]   
+sR       = est$par[4]   
+ks       = Ksmooth(ly, A2, mu0, Sigma0, Phi, sQ, sR)  
+xs_log <- ts(ks$Xs[1,,],start=1992, freq=12) + ts(ks$Xs[2,,], start=1992, freq=12)
+xs <- exp(xs_log)
+```
+
+## Part 1e
+
+First is a plot of the observed points and the estimates. Second is a plot of the estimates and the actual Covid data points that were previously removed.
+
+```{r}
+tsplot(alc_ts_nocovid, type = 'o', col = 4, pch = 19, main = "Observed (points) vs. Kalman-Smoothed Esimtates")
+lines(xs, col = 6, lwd = 2)
+
+tsplot(
+  window(alc_ts, start = c(2020, 1), end = c(2021, 4)),
+  main = "Kalman-Smoothed Estimates for Missing COVID Period",
+  xlab = "Date",
+  ylab = "Alcohol Sales"
+)
+lines(xs, col = 6, lwd = 2)
+```
+
+## Part 1f
+
+Now, we fit the model to account for the covid period.
+
+<sup>Created on `r Sys.Date()` with [reprex v`r utils::packageVersion("reprex")`](https://reprex.tidyverse.org)</sup>
