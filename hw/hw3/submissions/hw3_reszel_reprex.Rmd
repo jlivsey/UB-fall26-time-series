@@ -56,7 +56,7 @@ autoplot(alc_ts) +
 
 ## Part 1.2
 
-To obtain the Covid window, we will examine the difference in sales from the same month in the previous year by taking a difference using lag 12. The window in which these values are abnormally high are considered the Covid window. We find the maximum change from the previous year before 2020, and then consider the Covid window any observations larger than that maximum change.
+To obtain the Covid window, we will examine the difference in sales from the same month in the previous year by taking a difference using lag 12. The window in which these values are abnormally high are considered the Covid window. We find the maximum change from the previous year before 2020, and then consider the Covid window any observations larger than that maximum change. We manually exclude one large value in 2024, which is clearly beyond the end of the Covid pandemic.
 
 ```{r}
 alc_diffs <- ts(diff(alc_sales$value, lag=12), start=c(1993,1), frequency=12)
@@ -73,7 +73,7 @@ idx <- which(time(covid_window) == 2024 + (7/12))
 covid_window[idx] <- FALSE
 ```
 
-So, the window will be considered from Feb 2020 to April 2021. We will set these observations to NA. After, we plot them and see they have been removed.
+So, the window will be considered from Feb 2020 to April 2021. We will set these observations to NA. After, we plot them and see they have been removed. We use a log of the outcome since the variance in observations seems to increase after the covid period and this will help stabilize it.
 
 ```{r}
 alc_sales_nocovid <- alc_sales
@@ -121,7 +121,7 @@ w_{t,2} \\
 
 ## Part 1.4
 
-Here we fit the model.
+Here we fit the model. We set minimum and maximum values for the parameter estimates to prevent a large phi value from creating explosive behavior and from avoiding some computational issues I ran into with the other values. For our initial conditions, we choose a mu vector based off the initial year's data. We make the elements of the initial sigma matrix relatively large to reflect some level of uncertainty in the initial states. The initial value of phi is selected close to 1 since the values of the data seem highly dependent on the previous states. The other initial conditions were chosen somewhat arbitrarily based off similar values in the lecture notes, as I was unsure of how to best determine these.
 
 ```{r}
 num <- length(ly)
@@ -195,7 +195,7 @@ lines(xs, col = 6, lwd = 2)
 
 ## Part 1.6
 
-Now, we fit the model to account for the Covid period by incorporating an explicit intervention into the model.
+Now, we fit the model to account for the Covid period by incorporating an explicit intervention into the model. I didn't use the log transformed data to see if it makes any difference in the final model estimates. I use an initial small value of gamma like in the class notes.
 
 ```{r}
 pulse_input <- as.numeric(is.na(alc_ts_nocovid))
@@ -232,7 +232,7 @@ rownames(u_covid) = c("Phi11", "sigw1", "sigw2", "sigv", "Gam")
 u_covid
 
 ```
-The standard error for Gam is much larger than the actual estimates. Maybe Gamma is not needed in the model. Let's try it without Gam and see if it improves.
+The standard error for Gamma is much larger than the actual estimates. Maybe Gamma is not needed in the model. Let's try it without Gamma and see if it improves.
 
 ```{r}
 Linn_covid2 = function(para){
@@ -324,5 +324,42 @@ abline(v = 2026 + 6/12, lty=3)
 fc = y[(num+1):(num+n.ahead)]
 window(y, start=c(2026,7), end=c(2027,7))
 ```
+
+# Problem 2
+
+## Part 2.1
+
+Now, using the same series we would like to try some other smoothing techniques. We will use a smoothing spline. The first value for the smoothing parameter will be 0.6. Our goal is for this value of the parameter is to strike a balance between being relatively smooth/flat while also following the actual trajectory of the data. 
+
+```{r}
+plot(alc_ts)
+spline1 <- smooth.spline(time(alc_ts), alc_ts, spar=.6)
+lines(spline1, lwd=2, col=4)
+```
+
+## Part 2.2
+
+Now, we will add several more potential smoothing spline trend estimates using different smoothing parameters. A larger smoothing parameter will create an even more flat trend estimate, but we avoid making it too large to prevent it from being overly flat. Likewise, a smaller smoothing parameter will create a more "choppy" estimate that is sensitive to fluctuations in the data. Again, we avoid making this too small to prevent an over fit trend.
+
+```{r}
+spline2 <- smooth.spline(time(alc_ts), alc_ts, spar=.9)
+spline3 <- smooth.spline(time(alc_ts), alc_ts, spar=.3)
+```
+
+## Part 2.3
+
+Now, we plot all 3 of the smoothing spline trend estimates along with the actual data to see which may be the best choice.
+
+```{r}
+plot(alc_ts, ylab="Alcohol Sales (Millions of Dollars)")
+lines(spline1, lwd=2, col='blue')
+lines(spline2, lwd=2, col='red')
+lines(spline3, lwd=2, col='green')
+title("Smoothing Spline Trend Estimates")
+```
+
+## Part 2.4
+
+I would choose the trend estimates for the smoothing spline with parameter value of 0.6 as my final estimates for trend. The trend estimates plotted in green, representing the parameter value of 0.3, are overly bumpy as this model attempts to account for some of the seasonality of the series in its trend estimates. It is unnecessary to account for this in the trend estimates. The trend estimates in blue and red (parameter of 0.6 and 0.9 respectively) appear to be extremely similar, up until the Covid period occurs. At this point, the parameter value of 0.6 better accounts for the change in the series by modeling a sharp increase in trend at that point. The parameter value of 0.9 appears to be too smooth and models the increase in trend over a much longer period of time. The parameter value of 0.6 levels out more quickly after the Covid period, indicating the change in trend was short lived, and the series has largely leveled out post-Covid. This better reflects the data, which shows a flatter trend post-Covid, but with an increased seasonal effect. On the other hand, the parameter value of 0.9 appears to show an continued increasing trend post-Covid, which does not appear to be reflected in the data.  
 
 <sup>Created on `r Sys.Date()` with [reprex v`r utils::packageVersion("reprex")`](https://reprex.tidyverse.org)</sup>
