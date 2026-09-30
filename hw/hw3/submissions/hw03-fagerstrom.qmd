@@ -21,7 +21,6 @@ execute:
   cache: true
 ---
 
-## Overview
 
 
 ```{r}
@@ -39,8 +38,9 @@ library(tidyverse)
 
 theme_set(theme_minimal(base_size = 11))
 ```
+## Part 1: A structural model in state space form, with missing COVID data
 
-## 1. Load the series described above.
+1. Load the series described above.
 
 ```{r}
 #| eval: false
@@ -65,7 +65,7 @@ rm(url)
 ```
 
 
-## 2. Identify the COVID-19 window and **remove those observations** by setting them to `NA`. Keep a separate copy of the true, original values -- you will need them later for comparison. 
+1. Identify the COVID-19 window and **remove those observations** by setting them to `NA`. Keep a separate copy of the true, original values -- you will need them later for comparison. 
 
 ```{r}
 booze_ts <- ts(booze$value, start = c(1992, 1), frequency = 12)
@@ -92,7 +92,8 @@ covid2_ts <- ts(booze_cov2$booze_na, start = c(1992, 1), frequency = 12)
 ```
 
 
-## 3. Specify a **structural state space model** for this series following the component framework from 08-statespace 
+1. Specify a **structural state space model** for this series following the component framework from 08-statespace 
+
 
 
 Matches JJ class example, but that was quarterly data, so here:
@@ -116,6 +117,7 @@ $$
 
 
 $$
+\small
 \begin{pmatrix}
 T_{t} \\ S_{t} \\ S_{t-1} \\ S_{t-2} \\ S_{t-3} \\ S_{t-4} \\ S_{t-5} \\ S_{t-6} \\ S_{t-7} \\ S_{t-8} \\ S_{t-9} \\ S_{t-10}
 \end{pmatrix}
@@ -137,6 +139,7 @@ T_{t-1} \\ S_{t-1} \\ S_{t-2} \\ S_{t-3}  \\ S_{t-4} \\ S_{t-5} \\ S_{t-6} \\ S_
 \begin{pmatrix}
 w_{t, 1} \\ w_{t, 2} \\ 0 \\ 0 \\ 0\\ 0\\ 0\\ 0\\ 0\\ 0\\ 0\\ 0
 \end{pmatrix}
+\normalsize
 $$
 
 where 
@@ -149,7 +152,7 @@ q_{11} & 0 & \cdots \\
 \vdots & \vdots & \mathbf{0}_{10\times10} \\
 \end{pmatrix}
 $$
-## 4. Fit your model to the series **with the COVID period missing**, using the $A_t = 0$-when-missing technique from 08-statespace / 08b-statespaceapplications, and use the **Kalman smoother** to impute the missing COVID-period values.
+1. Fit your model to the series **with the COVID period missing**, using the $A_t = 0$-when-missing technique from 08-statespace / 08b-statespaceapplications, and use the **Kalman smoother** to impute the missing COVID-period values.
 
 
 ```{r}
@@ -286,7 +289,7 @@ Tsm_model1 <- Tsm
 p1_model1 <- p1
 ```
 
-## 5. Plot your imputed values against the true values to see the imputation. 
+1. Plot your imputed values against the true values to see the imputation. 
 
 ```{r}
 tsplot(booze_ts, main='Real vs Imputed', ylab='Alcohol Sales', type='o', pch=20)
@@ -463,7 +466,7 @@ p1_model2 <- p1
 So... maybe it is sort of fair to say that 2026 really is roughly "back to normal" (that is, where it would have been without covid).
 
 
-## 6. Now go back and refit your structural state space model a second time, this time properly accounting for the COVID period (e.g. by adding an explicit intervention/level-shift component to the model, or by simply using the real, non-removed data). Compare the fitted trend component of this second model to the trend from Steps 3-4.
+1. Now go back and refit your structural state space model a second time, this time properly accounting for the COVID period (e.g. by adding an explicit intervention/level-shift component to the model, or by simply using the real, non-removed data). Compare the fitted trend component of this second model to the trend from Steps 3-4.
 
 
 ```{r}
@@ -629,7 +632,7 @@ legend("topleft",
 
 
 
-## 7. Using your final model, forecast this series for next month and year.
+1. Using your final model, forecast this series for next month and year.
 
 
 
@@ -672,3 +675,77 @@ low  = ts(y[(num+1):(num+n.ahead)]-2*rmspe, start = c(2026, 8), freq=12)
 polygon(xx, yy, border=8, col=gray(.5, alpha = .3))
 abline(v=2026+7/12, lty=3)
 ```
+
+
+
+## Part 2: Estimating a trend with smoothing methods
+
+1. Using the same series, use **any smoothing technique from 07-smoothing** (e.g. a smoothing spline, simple exponential smoothing / Holt's level component, a moving average, or a kernel smoother) to estimate **only the trend** of the series. You are not fitting a full forecasting model for this part, and no forecast is required.
+
+```{r}
+tsplot(booze_ts, main = 'Alcohol Sales: Splines', 
+       ylab = 'Sales', lwd = 1, col=1)
+lines(smooth.spline(time(booze_ts), booze_ts, spar=.5), lwd=2, col=4)
+lines(smooth.spline(time(booze_ts), booze_ts, spar= 1), lty=2, lwd=2, col=2)
+```
+Blue line is still pretty smooth, but captures covid more than the red line.  (Also tried with .1 and .05 to really put in the bumps.)
+
+1. Produce at least two additional versions of your trend estimate using different smoothing parameters.
+
+```{r}
+tsplot(booze_ts, main = 'Alcohol Sales: Splines', 
+       ylab = 'Sales', lwd = 1, col = 1, xlim=c(2011,2026))
+
+lines(smooth.spline(time(booze_ts), booze_ts, spar = .4), lwd = 2, col = 2)
+lines(smooth.spline(time(booze_ts), booze_ts, spar = .5), lwd = 2, col = 3)
+lines(smooth.spline(time(booze_ts), booze_ts, spar = .6), lwd = 2, col = 4)
+
+# Add the legend here:
+legend("topleft", 
+       legend = c(
+         "Raw Data",
+         "Smoothing Spline (spar = .4)",
+         "Smoothing Spline (spar = .5)",
+         "Smoothing Spline (spar = .6)"
+         ), 
+       col = c(1, 2, 3, 4), 
+       lwd = c(1,2, 2, 2),
+       bg = "white")
+```
+
+
+1. Plot all trend estimates together with the data, and comment on the trade-off you see (recall the "choppy vs. smooth ride" discussion from 07-smoothing).
+
+To me, spar=.6 looks pretty good.  It has smoothed out the seasonal bumps, without smoothing right through covid.  (At spar=1, it was so smoothed out that covid "disappeared.")
+
+
+1. State which of the trend estimates you would report as final, and **justify your choice**: why is it preferable to the smoother alternative, and why is it preferable to the rougher alternative?
+
+
+```{r}
+tsplot(booze_ts, main = 'Alcohol Sales: Splines', 
+       ylab = 'Sales', lwd = 1, col = 1, xlim=c(2018.5,2021.5))
+
+lines(smooth.spline(time(booze_ts), booze_ts, spar = .3), lwd = 1, col = 7)
+lines(smooth.spline(time(booze_ts), booze_ts, spar = .4), lwd = 1, col = 2)
+lines(smooth.spline(time(booze_ts), booze_ts, spar = .5), lwd = 1, col = 3)
+lines(smooth.spline(time(booze_ts), booze_ts, spar = .6), lwd = 1, col = 4)
+lines(smooth.spline(time(booze_ts), booze_ts, spar = .7), lwd = 1, col = 5)
+lines(smooth.spline(time(booze_ts), booze_ts, spar = .8), lwd = 1, col = 6)
+
+# Add the legend here:
+legend("topleft", 
+       legend = c(
+         "Raw Data",
+         "Smoothing Spline (spar = .3)",
+         "Smoothing Spline (spar = .4)",
+         "Smoothing Spline (spar = .5)",
+         "Smoothing Spline (spar = .6)",
+         "Smoothing Spline (spar = .7)",
+         "Smoothing Spline (spar = .8)"
+         ), 
+       col = c(1,7, 2, 3, 4,5,6), 
+       lwd = c(1,1,1,1,1,1,1),
+       bg = "white")
+```
+spar .5 or .6 looks like the best to me.  Lower than that, and you start to see the seasonality (fluxuations up and down, esp after 2020).  Much more than that, and you don't see an notable increase at 2020, because it's been so smoothed away that covid is no longer visible.
