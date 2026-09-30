@@ -38,7 +38,7 @@ library(astsa)
 
 # Problem 1
 
-## Part 1a
+## Part 1.1
 
 First, we load in the data and examine it.
 
@@ -54,7 +54,7 @@ autoplot(alc_ts) +
   theme_minimal()
 ```
 
-## Part 1b
+## Part 1.2
 
 To obtain the Covid window, we will examine the difference in sales from the same month in the previous year by taking a difference using lag 12. The window in which these values are abnormally high are considered the Covid window. We find the maximum change from the previous year before 2020, and then consider the Covid window any observations larger than that maximum change.
 
@@ -67,7 +67,10 @@ autoplot(alc_diffs) +
 
 max_pre2023 <- max(window(alc_diffs, end = c(2020, 1)))
 
-covid_window <- alc_diffs > max_pre2023
+covid_window <- alc_diffs > max_pre2023 
+covid_window
+idx <- which(time(covid_window) == 2024 + (7/12))
+covid_window[idx] <- FALSE
 ```
 
 So, the window will be considered from Feb 2020 to April 2021. We will set these observations to NA. After, we plot them and see they have been removed.
@@ -82,7 +85,7 @@ autoplot(alc_ts_nocovid) +
   labs(title = "Retail Sales: Covid Removed", x = "Time", y = "Value") +
   theme_minimal()
 ```
-## Part 1c
+## Part 1.3
 
 The structural state space model can be written as: $$T_t = \phi T_{t-1} + w_{1,t}$$ $$S_t +S_{t-1}+...+S_{t-11}=w_{t,2}$$ Then given the overall model as $y_t=T_t+S_t+\nu_t$, we can write the observation equation as $$y_t =\begin{pmatrix} 1 & 1 & 0 & 
 \cdots & 0 \end{pmatrix}\begin{pmatrix} T_t \\ S_t \\ S_{t-1} \\ \cdots \\ S_{t-10} \end{pmatrix} + v_t $$ and the state equation as $$
@@ -116,7 +119,7 @@ w_{t,2} \\
 0
 \end{pmatrix} $$
 
-## Part 1d
+## Part 1.4
 
 Here we fit the model.
 
@@ -173,7 +176,7 @@ xs_log <- ts(ks$Xs[1,,],start=1992, freq=12) + ts(ks$Xs[2,,], start=1992, freq=1
 xs <- exp(xs_log)
 ```
 
-## Part 1e
+## Part 1.5
 
 First is a plot of the observed points and the estimates. Second is a plot of the estimates and the actual Covid data points that were previously removed.
 
@@ -190,8 +193,136 @@ tsplot(
 lines(xs, col = 6, lwd = 2)
 ```
 
-## Part 1f
+## Part 1.6
 
-Now, we fit the model to account for the covid period.
+Now, we fit the model to account for the Covid period by incorporating an explicit intervention into the model.
+
+```{r}
+pulse_input <- as.numeric(is.na(alc_ts_nocovid))
+
+Linn_covid = function(para){
+ Phi = diag(0,12) 
+ Phi[1,1] = para[1] 
+ Phi[2,]=c(0,rep(-1,11));
+ for (i in rep(3:12)){
+   Phi[i,i-1] = 1
+ }
+ sQ1 = para[2]; sQ2 = para[3] 
+ sQ  = diag(0,12); sQ[1,1]=sQ1; sQ[2,2]=sQ2
+ sR = para[4]
+ gam = para[5]
+ kf = Kfilter(alc_ts, A, mu0_covid, Sigma0_covid, Phi, sQ, sR, Gam=gam, input=pulse_input)
+ return(kf$like)  
+}
+
+first_covid <- alc_ts[1:12]
+m0_covid <- mean(first_covid, na.rm = TRUE)
+s_covid  <- first_covid - m0_covid
+s_covid <- s_covid - mean(s_covid)
+mu0_covid    <- matrix(c(m0_covid, s_covid[12], s_covid[11:2]), ncol = 1)
+Sigma0_covid <- diag(var(alc_ts, na.rm = TRUE), 12)
+init.par_covid <- c(0.99, 0.02, 0.02, 0.05, 0.05)
+est_covid <- optim(init.par_covid, Linn_covid, method = "L-BFGS-B",
+             lower = c(0.5, 1e-4, 1e-4, 1e-4, -Inf),
+             upper = c(1, Inf, Inf, Inf, Inf), hessian = TRUE)
+
+SE_covid  = sqrt(diag(solve(est_covid$hessian)))
+u_covid   = cbind(estimate_covid = est_covid$par, SE_covid)
+rownames(u_covid) = c("Phi11", "sigw1", "sigw2", "sigv", "Gam")
+u_covid
+
+```
+The standard error for Gam is much larger than the actual estimates. Maybe Gamma is not needed in the model. Let's try it without Gam and see if it improves.
+
+```{r}
+Linn_covid2 = function(para){
+ Phi = diag(0,12) 
+ Phi[1,1] = para[1] 
+ Phi[2,]=c(0,rep(-1,11));
+ for (i in rep(3:12)){
+   Phi[i,i-1] = 1
+ }
+ sQ1 = para[2]; sQ2 = para[3] 
+ sQ  = diag(0,12); sQ[1,1]=sQ1; sQ[2,2]=sQ2
+ sR = para[4]
+ kf = Kfilter(alc_ts, A, mu0_covid, Sigma0_covid, Phi, sQ, sR)
+ return(kf$like)  
+}
+
+init.par_covid2 <- c(0.99, 0.02, 0.02, 0.05)
+est_covid2 <- optim(init.par_covid2, Linn_covid2, method = "L-BFGS-B",
+             lower = c(0.5, 1e-4, 1e-4, 1e-4),
+             upper = c(1, Inf, Inf, Inf), hessian = TRUE)
+
+SE_covid2  = sqrt(diag(solve(est_covid2$hessian)))
+u_covid2   = cbind(estimate_covid2 = est_covid2$par, SE_covid2)
+rownames(u_covid2) = c("Phi11", "sigw1", "sigw2", "sigv")
+u_covid2
+
+Phi_covid = diag(0,12) 
+Phi_covid[1,1] = est_covid2$par[1] 
+Phi_covid[2,]=c(0,rep(-1,11));
+for (i in rep(3:12)){
+   Phi_covid[i,i-1] = 1
+ }
+sQ_covid       = diag(0,12)
+sQ_covid[1,1]  = est_covid2$par[2]
+sQ_covid[2,2]  = est_covid2$par[3]   
+sR_covid       = est_covid2$par[4]   
+ks_covid       = Ksmooth(alc_ts, A2, mu0_covid, Sigma0_covid, Phi_covid, sQ_covid, sR_covid)  
+xs_covid <- ts(ks_covid$Xs[1,,],start=1992, freq=12) + ts(ks_covid$Xs[2,,], start=1992, freq=12)
+```
+
+Now, let's see how the trend differs between this and the other model we fit where the Covid observations were removed.
+
+```{r}
+xs_covid_trend <- ts(ks_covid$Xs[1,,],start=1992, freq=12)
+xs_trend <- exp(ts(ks$Xs[1,,], start=1992, freq=12))
+
+tsplot(alc_ts, type = 'o', col = 4, pch = 19, main = "Observed (points) vs. Kalman-Smoothed Trend")
+lines(xs_trend, col = 1, lwd = 2)
+lines(xs_covid_trend, col=2, lwd=2)
+```
+
+These appear to be very similar in terms of the extracted trend. In fact, the difference between the two models (in terms of trend) seems to be nearly negligible. So, it is possible this state-space structural model is very appropriate for handling the Covid spike, regardless of how we treat those values (missing or not).
+
+```{r}
+xs_dif <- xs_trend - xs_covid_trend
+mean(xs_dif)
+
+```
+
+On average, the estimates for trend only differ by about 24.5, which is small given the scale is in the 1000s. We will make our estimate using the second model, which includes the Covid values. Since forcing those abnormalities to be missing doesn't produce much of a change in the model trend, we will stick with the full data set.
+
+## Part 1.7
+
+Now, we want to use this model to make the forecast for next month and year. First, we provide a plot. Second, we provide the estimates.
+
+```{r}
+n.ahead = 12
+y       = ts(append(alc_ts, rep(0,n.ahead)), start=1992, freq=12)
+rmspe   = rep(0,n.ahead) 
+x00     = ks_covid$Xf[,,num]
+P00     = ks_covid$Pf[,,num]
+Q       = sQ%*%t(sQ) 
+R       = sR%*%t(sR)
+for (m in 1:n.ahead){
+       xp = Phi_covid%*%x00
+       Pp = Phi_covid%*%P00%*%t(Phi_covid)+Q
+      sig = A%*%Pp%*%t(A)+R
+        K = Pp%*%t(A)%*%(1/sig)
+      x00 = xp 
+      P00 = Pp-K%*%A%*%Pp
+ y[num+m] = A%*%xp
+ rmspe[m] = sqrt(sig) 
+}
+
+
+tsplot(y, type='o', main='', ylab='Alcohol Sales')
+abline(v = 2026 + 6/12, lty=3) 
+
+fc = y[(num+1):(num+n.ahead)]
+window(y, start=c(2026,7), end=c(2027,7))
+```
 
 <sup>Created on `r Sys.Date()` with [reprex v`r utils::packageVersion("reprex")`](https://reprex.tidyverse.org)</sup>
