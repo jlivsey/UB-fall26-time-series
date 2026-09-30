@@ -1,3 +1,7 @@
+#' ---
+#' output: reprex::reprex_document
+#' ---
+
 ##Dimmig HW 3
 #attempting to upload to github
 
@@ -15,7 +19,7 @@ library(lubridate)
 library(tidyr)
 library(fpp3)
 library(astsa)
-
+library(reprex)
 
 fred_url <- "https://fred.stlouisfed.org/graph/fredgraph.csv?id=MRTSSM4453USN"
 liquor_raw <- read.csv(fred_url)
@@ -266,7 +270,6 @@ legend("topleft",
 # Out of these 3 spars, I would use the spar of 0.79 to model the trend of the data. A smoother spline (spar = 1.0) contained 
 # bias and failed to capture the steep increase and slight flattening from the COVID window on. A 
 # rougher spline (spar = 0.2)  captured the overall trend, but primarily captured the seasonality of the data.
-
 
 
 
