@@ -1,0 +1,674 @@
+---
+title: "Homework 3"
+subtitle: "UB Time Series -- Fall 2026"
+author: "Emily Fagerstrom"
+date: today
+format:
+  html:
+    embed-resources: true
+    toc: true
+    toc-depth: 3
+    code-fold: false
+    fig-width: 8
+    fig-height: 4.5
+    theme: cosmo
+  gfm:
+    toc: true
+execute:
+  echo: true
+  warning: false
+  message: false
+  cache: true
+---
+
+## Overview
+
+
+```{r}
+#| label: setup
+#| echo: false
+
+library(ggplot2)
+library(tsibble)
+library(dplyr)
+library(tsbox)
+library(astsa)
+library(tidyverse)
+
+
+
+theme_set(theme_minimal(base_size = 11))
+```
+
+## 1. Load the series described above.
+
+```{r}
+#| eval: false
+
+fred_url <- "https://fred.stlouisfed.org/graph/fredgraph.csv?id=MRTSSM4453USN"
+booze_raw <- read.csv(fred_url)
+write.csv(booze_raw, "fagerstromData/booze.csv",row.names=FALSE)
+
+rm(booze_raw)
+rm(fred_url)
+```
+
+```{r}
+
+url <- "https://github.com/jlivsey/UB-fall26-time-series/raw/main/hw/hw3/submissions/fagerstromData/booze.csv"
+
+booze <- read_csv(url, show_col_types = FALSE) |>
+  rename(date = observation_date, value = MRTSSM4453USN) |>
+  arrange(date)
+
+rm(url)
+```
+
+
+## 2. Identify the COVID-19 window and **remove those observations** by setting them to `NA`. Keep a separate copy of the true, original values -- you will need them later for comparison. 
+
+```{r}
+booze_ts <- ts(booze$value, start = c(1992, 1), frequency = 12)
+
+ts_dygraphs(booze_ts)
+```
+
+Unlike the icnsa data, it doesn't look to me like covid was a finite event and then things "went back to normal."  It more feels like there were some permanently-changed habits.  That said, December 2025 is noticibly smaller than December 2024 (and the all-time high was Dec 2023). So... I'm going to declare that the most recent year of data (August 2025 to July 2026) gets to be in the time series, and that February 2020 was the last bit of data before the NAs kick in.  So... deleting March 2020 to July 2025.
+
+(Although I'm curious to try it with everything after Feb 2020 deleted to see how the imputation runs.)
+
+```{r}
+
+booze_cov1 <- booze |>
+  mutate(booze_na = if_else(date >= as.Date("2020-03-01") & date <= as.Date("2025-07-01"), NA_real_, value))
+
+covid1_ts <- ts(booze_cov1$booze_na, start = c(1992, 1), frequency = 12) 
+
+booze_cov2 <- booze |>
+  mutate(booze_na = if_else(date >= as.Date("2020-03-01"), NA_real_, value))
+
+covid2_ts <- ts(booze_cov2$booze_na, start = c(1992, 1), frequency = 12) 
+
+```
+
+
+## 3. Specify a **structural state space model** for this series following the component framework from 08-statespace 
+
+
+Matches JJ class example, but that was quarterly data, so here:
+
+$$
+y_t = T_t + S_t + v_t
+$$
+
+
+$$
+y_t = 
+\begin{pmatrix}
+1 & 1 & 0 & 0 & 0 & 0 & 0 & 0 & 0 & 0 & 0 & 0 
+\end{pmatrix}
+\begin{pmatrix}
+T_{t} \\ S_{t} \\ S_{t-1} \\ S_{t-2} \\ S_{t-3} \\ S_{t-4} \\ S_{t-5} \\ S_{t-6} \\ S_{t-7} \\ S_{t-8} \\ S_{t-9} \\ S_{t-10}
+\end{pmatrix}
++ 
+v_t
+$$
+
+
+$$
+\begin{pmatrix}
+T_{t} \\ S_{t} \\ S_{t-1} \\ S_{t-2} \\ S_{t-3} \\ S_{t-4} \\ S_{t-5} \\ S_{t-6} \\ S_{t-7} \\ S_{t-8} \\ S_{t-9} \\ S_{t-10}
+\end{pmatrix}
+= 
+\begin{bmatrix}
+\phi & 0 & 0 & 0 & 0 & 0 & 0 & 0 & 0 & 0 & 0 & 0 \\
+0 & -1 & -1 & -1 & -1 & -1 & -1 & -1 & -1 & -1 & -1 & -1 \\
+0 & &&&&&&&&&&\\
+0 & &&&&&&&&&& \\
+0 & &&&&& I_{10} &&&&& \\
+0 & &&&&&&&&&& \\
+\vdots & &&&&&&&&&& \\
+
+\end{bmatrix}
+\begin{pmatrix}
+T_{t-1} \\ S_{t-1} \\ S_{t-2} \\ S_{t-3}  \\ S_{t-4} \\ S_{t-5} \\ S_{t-6} \\ S_{t-7} \\ S_{t-8} \\ S_{t-9} \\ S_{t-10} \\ S_{t-11}
+\end{pmatrix}
++
+\begin{pmatrix}
+w_{t, 1} \\ w_{t, 2} \\ 0 \\ 0 \\ 0\\ 0\\ 0\\ 0\\ 0\\ 0\\ 0\\ 0
+\end{pmatrix}
+$$
+
+where 
+
+$$
+Q = 
+\begin{pmatrix}
+q_{11} & 0 & \cdots \\
+0 & q_{22} & \cdots \\
+\vdots & \vdots & \mathbf{0}_{10\times10} \\
+\end{pmatrix}
+$$
+## 4. Fit your model to the series **with the COVID period missing**, using the $A_t = 0$-when-missing technique from 08-statespace / 08b-statespaceapplications, and use the **Kalman smoother** to impute the missing COVID-period values.
+
+
+```{r}
+num = length(covid1_ts)
+
+# Create a time-varying A array: dim = c(q, p, num) -> c(1, 12, num)
+A = array(0, dim = c(1, 12, num))
+for (k in 1:num) {
+  if (!is.na(covid1_ts[k])) {
+    A[1, , k] = c(1, 1, rep(0, 10)) # Active when data exists
+  } else {
+    A[1, , k] = rep(0, 12)          # Zeroed out during the COVID NA gap
+  }
+}
+
+
+
+# Function to Calculate Likelihood 
+Linn = function(para){
+  # Force parameters to stay positive (except phi which can be around 1)
+  phi  = para[1]
+  sQ1  = abs(para[2]) 
+  sQ2  = abs(para[3])
+  sR   = abs(para[4])
+  
+  Phi = diag(0, 12) 
+  Phi[1,1] = phi 
+  Phi[2,]  = c(0, rep(-1, 11))
+  for(i in 3:12) {
+    Phi[i,] = c(rep(0, i-2), 1, rep(0, 13-i))
+  }
+  
+  sQ = diag(0, 12)
+  sQ[1,1] = sQ1
+  sQ[2,2] = sQ2
+  
+  # Run filter safely
+  kf = tryCatch({
+    Kfilter(covid1_ts, A, mu0, Sigma0, Phi, sQ, sR)
+  }, error = function(e) {
+    return(list(like = 1e10))
+  })
+  
+  # If it produces NaNs, return a huge penalty so optim backs away
+  if (is.nan(kf$like) || is.infinite(kf$like)) {
+    return(1e10)
+  }
+  
+  return(kf$like)  
+}
+```
+
+Initial parameters: had trouble picking these.  First blindly used the JJ ones which were wildly on the wrong scale.  Then picked ones that gave me a bunch of log(det(sigmat)) NaN.  So... absolute values thrown in to keep things ok.?  Still had issues.  Had to replace BFGS with "L-BFGS-B"
+
+
+
+
+```{r}
+# Initial Parameters 
+mu0      = c(1414,0,0,0,0,0,0,0,0,0,0,0) #matching the format, but 1414 is first sales amt
+Sigma0   = diag(100, 12) #seasonal variance
+Sigma0[1,1] = 1000 #since var(booze$value)=2214464, so ... large
+
+
+init.par = c(1.03, 50, 10, 100)    
+
+est = optim(
+  init.par,
+  Linn,
+  method = "L-BFGS-B",
+  lower = c(-Inf, 0.001, 0.001, 0.001), # Keeps variance params positive!
+  hessian = TRUE
+)
+```
+
+```{r}
+#| output-location: slide
+# Smooth
+Phi      = diag(0,12) 
+Phi[1,1] = est$par[1];
+Phi[2,]=c(0,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1);
+Phi[3,]=c(0,1,0,0,0,0,0,0,0,0,0,0);
+Phi[4,]=c(0,0,1,0,0,0,0,0,0,0,0,0);
+Phi[5,]=c(0,0,0,1,0,0,0,0,0,0,0,0);
+Phi[6,]=c(0,0,0,0,1,0,0,0,0,0,0,0);
+Phi[7,]=c(0,0,0,0,0,1,0,0,0,0,0,0);
+Phi[8,]=c(0,0,0,0,0,0,1,0,0,0,0,0);
+Phi[9,]=c(0,0,0,0,0,0,0,1,0,0,0,0);
+Phi[10,]=c(0,0,0,0,0,0,0,0,1,0,0,0);
+Phi[11,]=c(0,0,0,0,0,0,0,0,0,1,0,0);
+Phi[12,]=c(0,0,0,0,0,0,0,0,0,0,1,0);
+sQ       = diag(0,12)
+sQ[1,1]  = est$par[2]
+sQ[2,2]  = est$par[3]   
+sR       = est$par[4]   
+ks       = Ksmooth(covid1_ts, A, mu0, Sigma0, Phi, sQ, sR)   
+
+# Plots
+Tsm   = ts(ks$Xs[1,,], start=1992, freq=12)
+Ssm   = ts(ks$Xs[2,,], start=1992, freq=12)
+fitted_signal = Tsm + Ssm # Combined Trend + Seasonal model
+
+p1    = 3*sqrt(ks$Ps[1,1,]); p2 = 3*sqrt(ks$Ps[2,2,])
+combined_error = p1 + p2
+
+par(mfrow=c(2,1))
+
+
+# --- Panel 1: Trend Component ---
+tsplot(Tsm, main='Trend Component', ylab='Trend')
+  xx  = c(time(covid1_ts), rev(time(covid1_ts)))
+  yy  = c(Tsm-p1, rev(Tsm+p1))
+polygon(xx, yy, border=NA, col=gray(.5, alpha = .3))
+
+# --- Panel 2: Data & Filled-in Model ---
+# 1. Plot raw data (this will show the missing COVID gap points as empty space)
+tsplot(covid1_ts, main='Data & Smoothed Model (COVID Gap Filled)', ylab='Alcohol Sales', type='o', pch=20)
+
+# 2. Draw the confidence interval polygon across the whole timeline
+xx  = c(time(covid1_ts), rev(time(covid1_ts)))
+yy  = c(fitted_signal - combined_error, rev(fitted_signal + combined_error))
+polygon(xx, yy, border=NA, col=gray(.5, alpha = .3))
+
+# 3. OVERLAY the smoothed model line so it bridges right across the COVID gap!
+lines(fitted_signal, col='red', lwd=1)
+
+# 4. Add a legend so you know what's what
+legend("topleft", legend=c("Raw Data (with NA gap)", "Smoothed Model"), 
+       col=c("black", "red"), lty=c(1, 1), pch=c(20, NA), bg="white")
+
+
+
+Tsm_model1 <- Tsm
+p1_model1 <- p1
+```
+
+## 5. Plot your imputed values against the true values to see the imputation. 
+
+```{r}
+tsplot(booze_ts, main='Real vs Imputed', ylab='Alcohol Sales', type='o', pch=20)
+
+lines(fitted_signal, col='red', lwd=1)
+
+legend("topleft", legend=c("Raw Data", "Smoothed Model"), 
+       col=c("black", "red"), lty=c(1, 1), pch=c(20, NA), bg="white")
+
+
+
+
+tsplot(booze_ts, main='Real vs Imputed', ylab='Alcohol Sales', type='o', pch=20, xlim=c(2019,2026))
+
+lines(fitted_signal, col='red', lwd=1)
+
+legend("topleft", legend=c("Raw Data", "Smoothed Model"), 
+       col=c("black", "red"), lty=c(1, 1), pch=c(20, NA), bg="white")
+
+```
+
+Just out of curiosity... deleting all the data from March 2020 and beyond.  (forecasting instead of smoothing)
+
+```{r}
+
+num = length(covid2_ts)
+
+# Create a time-varying A array: dim = c(q, p, num) -> c(1, 12, num)
+A = array(0, dim = c(1, 12, num))
+for (k in 1:num) {
+  if (!is.na(covid2_ts[k])) {
+    A[1, , k] = c(1, 1, rep(0, 10)) # Active when data exists
+  } else {
+    A[1, , k] = rep(0, 12)          # Zeroed out during the COVID NA gap
+  }
+}
+
+
+
+# Function to Calculate Likelihood 
+Linn = function(para){
+  # Force parameters to stay positive (except phi which can be around 1)
+  phi  = para[1]
+  sQ1  = abs(para[2]) 
+  sQ2  = abs(para[3])
+  sR   = abs(para[4])
+  
+  Phi = diag(0, 12) 
+  Phi[1,1] = phi 
+  Phi[2,]  = c(0, rep(-1, 11))
+  for(i in 3:12) {
+    Phi[i,] = c(rep(0, i-2), 1, rep(0, 13-i))
+  }
+  
+  sQ = diag(0, 12)
+  sQ[1,1] = sQ1
+  sQ[2,2] = sQ2
+  
+  # Run filter safely
+  kf = tryCatch({
+    Kfilter(covid2_ts, A, mu0, Sigma0, Phi, sQ, sR)
+  }, error = function(e) {
+    return(list(like = 1e10))
+  })
+  
+  # If it produces NaNs, return a huge penalty so optim backs away
+  if (is.nan(kf$like) || is.infinite(kf$like)) {
+    return(1e10)
+  }
+  
+  return(kf$like)  
+}
+
+
+# Initial Parameters 
+mu0      = c(1414,0,0,0,0,0,0,0,0,0,0,0) #matching the format, but 1414 is first sales amt
+Sigma0   = diag(100, 12) #seasonal variance
+Sigma0[1,1] = 1000 #since var(booze$value)=2214464, so ... large
+
+
+init.par = c(1.03, 50, 10, 100)    
+
+est = optim(
+  init.par,
+  Linn,
+  method = "L-BFGS-B",
+  lower = c(-Inf, 0.001, 0.001, 0.001), # Keeps variance params positive!
+  hessian = TRUE
+)
+
+
+# Smooth
+Phi      = diag(0,12) 
+Phi[1,1] = est$par[1];
+Phi[2,]=c(0,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1);
+Phi[3,]=c(0,1,0,0,0,0,0,0,0,0,0,0);
+Phi[4,]=c(0,0,1,0,0,0,0,0,0,0,0,0);
+Phi[5,]=c(0,0,0,1,0,0,0,0,0,0,0,0);
+Phi[6,]=c(0,0,0,0,1,0,0,0,0,0,0,0);
+Phi[7,]=c(0,0,0,0,0,1,0,0,0,0,0,0);
+Phi[8,]=c(0,0,0,0,0,0,1,0,0,0,0,0);
+Phi[9,]=c(0,0,0,0,0,0,0,1,0,0,0,0);
+Phi[10,]=c(0,0,0,0,0,0,0,0,1,0,0,0);
+Phi[11,]=c(0,0,0,0,0,0,0,0,0,1,0,0);
+Phi[12,]=c(0,0,0,0,0,0,0,0,0,0,1,0);
+sQ       = diag(0,12)
+sQ[1,1]  = est$par[2]
+sQ[2,2]  = est$par[3]   
+sR       = est$par[4]   
+ks       = Ksmooth(covid2_ts, A, mu0, Sigma0, Phi, sQ, sR)   
+
+# Plots
+Tsm   = ts(ks$Xs[1,,], start=1992, freq=12)
+Ssm   = ts(ks$Xs[2,,], start=1992, freq=12)
+fitted_signal = Tsm + Ssm # Combined Trend + Seasonal model
+
+p1    = 3*sqrt(ks$Ps[1,1,]); p2 = 3*sqrt(ks$Ps[2,2,])
+combined_error = p1 + p2
+
+par(mfrow=c(2,1))
+
+
+# --- Panel 1: Trend Component ---
+tsplot(Tsm, main='Trend Component', ylab='Trend')
+  xx  = c(time(covid2_ts), rev(time(covid2_ts)))
+  yy  = c(Tsm-p1, rev(Tsm+p1))
+polygon(xx, yy, border=NA, col=gray(.5, alpha = .3))
+
+# --- Panel 2: Data & Filled-in Model ---
+# 1. Plot raw data (this will show the missing COVID gap points as empty space)
+tsplot(covid2_ts, main='Data & Smoothed Model (COVID Gap Filled)', ylab='Alcohol Sales', type='o', pch=20)
+
+# 2. Draw the confidence interval polygon across the whole timeline
+xx  = c(time(covid2_ts), rev(time(covid2_ts)))
+yy  = c(fitted_signal - combined_error, rev(fitted_signal + combined_error))
+polygon(xx, yy, border=NA, col=gray(.5, alpha = .3))
+
+# 3. OVERLAY the smoothed model line so it bridges right across the COVID gap!
+lines(fitted_signal, col='red', lwd=1)
+
+# 4. Add a legend so you know what's what
+legend("topleft", legend=c("Raw Data (with NA gap)", "Smoothed Model"), 
+       col=c("black", "red"), lty=c(1, 1), pch=c(20, NA), bg="white")
+
+
+
+####################
+
+
+tsplot(booze_ts, main='Real vs Imputed', ylab='Alcohol Sales', type='o', pch=20)
+
+lines(fitted_signal, col='red', lwd=1)
+
+legend("topleft", legend=c("Raw Data", "Smoothed Model"), 
+       col=c("black", "red"), lty=c(1, 1), pch=c(20, NA), bg="white")
+
+
+
+
+tsplot(booze_ts, main='Real vs Imputed', ylab='Alcohol Sales', type='o', pch=20, xlim=c(2019,2026))
+
+lines(fitted_signal, col='red', lwd=1)
+
+legend("topleft", legend=c("Raw Data", "Smoothed Model"), 
+       col=c("black", "red"), lty=c(1, 1), pch=c(20, NA), bg="white")
+
+
+
+Tsm_model2 <- Tsm
+p1_model2 <- p1
+
+```
+
+So... maybe it is sort of fair to say that 2026 really is roughly "back to normal" (that is, where it would have been without covid).
+
+
+## 6. Now go back and refit your structural state space model a second time, this time properly accounting for the COVID period (e.g. by adding an explicit intervention/level-shift component to the model, or by simply using the real, non-removed data). Compare the fitted trend component of this second model to the trend from Steps 3-4.
+
+
+```{r}
+
+num = length(booze_ts)
+
+A   = cbind(1,1,0,0,0,0,0,0,0,0,0,0) 
+
+
+# Function to Calculate Likelihood 
+Linn = function(para){
+  # Force parameters to stay positive (except phi which can be around 1)
+  phi  = para[1]
+  sQ1  = abs(para[2]) 
+  sQ2  = abs(para[3])
+  sR   = abs(para[4])
+  
+  Phi = diag(0, 12) 
+  Phi[1,1] = phi 
+  Phi[2,]  = c(0, rep(-1, 11))
+  for(i in 3:12) {
+    Phi[i,] = c(rep(0, i-2), 1, rep(0, 13-i))
+  }
+  
+  sQ = diag(0, 12)
+  sQ[1,1] = sQ1
+  sQ[2,2] = sQ2
+  
+  # Run filter safely
+  kf = tryCatch({
+    Kfilter(booze_ts, A, mu0, Sigma0, Phi, sQ, sR)
+  }, error = function(e) {
+    return(list(like = 1e10))
+  })
+  
+  # If it produces NaNs, return a huge penalty so optim backs away
+  if (is.nan(kf$like) || is.infinite(kf$like)) {
+    return(1e10)
+  }
+  
+  return(kf$like)  
+}
+
+
+# Initial Parameters 
+mu0      = c(1414,0,0,0,0,0,0,0,0,0,0,0) #matching the format, but 1414 is first sales amt
+Sigma0   = diag(100, 12) #seasonal variance
+Sigma0[1,1] = 1000 #since var(booze$value)=2214464, so ... large
+
+
+init.par = c(1.03, 50, 10, 100)    
+
+est = optim(
+  init.par,
+  Linn,
+  method = "L-BFGS-B",
+  lower = c(-Inf, 0.001, 0.001, 0.001), # Keeps variance params positive!
+  hessian = TRUE
+)
+
+
+# Smooth
+Phi      = diag(0,12) 
+Phi[1,1] = est$par[1];
+Phi[2,]=c(0,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1);
+Phi[3,]=c(0,1,0,0,0,0,0,0,0,0,0,0);
+Phi[4,]=c(0,0,1,0,0,0,0,0,0,0,0,0);
+Phi[5,]=c(0,0,0,1,0,0,0,0,0,0,0,0);
+Phi[6,]=c(0,0,0,0,1,0,0,0,0,0,0,0);
+Phi[7,]=c(0,0,0,0,0,1,0,0,0,0,0,0);
+Phi[8,]=c(0,0,0,0,0,0,1,0,0,0,0,0);
+Phi[9,]=c(0,0,0,0,0,0,0,1,0,0,0,0);
+Phi[10,]=c(0,0,0,0,0,0,0,0,1,0,0,0);
+Phi[11,]=c(0,0,0,0,0,0,0,0,0,1,0,0);
+Phi[12,]=c(0,0,0,0,0,0,0,0,0,0,1,0);
+sQ       = diag(0,12)
+sQ[1,1]  = est$par[2]
+sQ[2,2]  = est$par[3]   
+sR       = est$par[4]   
+ks       = Ksmooth(booze_ts, A, mu0, Sigma0, Phi, sQ, sR)   
+
+# Plots
+Tsm   = ts(ks$Xs[1,,], start=1992, freq=12)
+Ssm   = ts(ks$Xs[2,,], start=1992, freq=12)
+fitted_signal = Tsm + Ssm # Combined Trend + Seasonal model
+
+p1    = 3*sqrt(ks$Ps[1,1,]); p2 = 3*sqrt(ks$Ps[2,2,])
+combined_error = p1 + p2
+
+par(mfrow=c(2,1))
+
+
+# --- Panel 1: Trend Component ---
+tsplot(Tsm, main='Trend Component', ylab='Trend')
+  xx  = c(time(booze_ts), rev(time(booze_ts)))
+  yy  = c(Tsm-p1, rev(Tsm+p1))
+polygon(xx, yy, border=NA, col=gray(.5, alpha = .3))
+
+# --- Panel 2: Data & Filled-in Model ---
+# 1. Plot raw data (this will show the missing COVID gap points as empty space)
+tsplot(booze_ts, main='Data & Smoothed Model (COVID Gap Filled)', ylab='Alcohol Sales', type='o', pch=20)
+
+# 2. Draw the confidence interval polygon across the whole timeline
+xx  = c(time(booze_ts), rev(time(booze_ts)))
+yy  = c(fitted_signal - combined_error, rev(fitted_signal + combined_error))
+polygon(xx, yy, border=NA, col=gray(.5, alpha = .3))
+
+# 3. OVERLAY the smoothed model line so it bridges right across the COVID gap!
+lines(fitted_signal, col='red', lwd=1)
+
+# 4. Add a legend so you know what's what
+legend("topleft", legend=c("Raw Data (with NA gap)", "Smoothed Model"), 
+       col=c("black", "red"), lty=c(1, 1), pch=c(20, NA), bg="white")
+
+
+
+####################
+
+
+tsplot(booze_ts, main='Real vs Imputed', ylab='Alcohol Sales', type='o', pch=20)
+
+lines(fitted_signal, col='red', lwd=1)
+
+legend("topleft", legend=c("Raw Data", "Smoothed Model"), 
+       col=c("black", "red"), lty=c(1, 1), pch=c(20, NA), bg="white")
+
+
+
+
+tsplot(booze_ts, main='Real vs Imputed', ylab='Alcohol Sales', type='o', pch=20, xlim=c(2019,2026))
+
+lines(fitted_signal, col='red', lwd=1)
+
+legend("topleft", legend=c("Raw Data", "Smoothed Model"), 
+       col=c("black", "red"), lty=c(1, 1), pch=c(20, NA), bg="white")
+
+
+Tsm_model3 <- Tsm
+p1_model3 <- p1
+
+```
+
+```{r}
+# 1. Plot Model 1 as the base canvas
+tsplot(Tsm_model1, main = 'Comparison of Trend Components Across Models', 
+       ylab = 'Trend', col = 'black', lwd = 1.5)
+
+# 2. Overlay Model 2 (Cutoff / Forecast)
+lines(Tsm_model2, col = 'blue', lwd = 2)
+
+# 3. Overlay Model 3 (Full Data)
+lines(Tsm_model3, col = 'red', lwd = 2)
+
+# 4. Add a clean legend
+legend("topleft", 
+       legend = c("Model 1: Gap Interpolation (2020-2025 NA)", 
+                  "Model 2: Cutoff / Forecast (2020-on NA)", 
+                  "Model 3: Full Data (Real COVID shock)"), 
+       col = c("black", "blue", "red"), 
+       lty = 1, lwd = c(1.5, 2, 2), bg = "white")
+
+```
+
+
+
+## 7. Using your final model, forecast this series for next month and year.
+
+
+
+```{r}
+#| output-location: slide
+# Forecast
+n.ahead = 12
+y       = ts(append(booze_ts, rep(NA,n.ahead)), start=1992, freq=12)
+rmspe   = rep(0,n.ahead) 
+x00     = ks$Xf[,,num]
+P00     = ks$Pf[,,num]
+Q       = sQ%*%t(sQ) 
+R       = sR%*%t(sR)
+for (m in 1:n.ahead){
+       xp = Phi%*%x00
+       Pp = Phi%*%P00%*%t(Phi)+Q
+      sig = A%*%Pp%*%t(A)+R
+        K = Pp%*%t(A)%*%(1/sig)
+      x00 = xp 
+      P00 = Pp-K%*%A%*%Pp
+ y[num+m] = A%*%xp
+ rmspe[m] = sqrt(sig) 
+}
+tsplot(y, type='o', main='', ylab='Alcohol Sales')
+upp  = ts(y[(num+1):(num+n.ahead)]+2*rmspe, start = c(2026, 8), freq=12)
+low  = ts(y[(num+1):(num+n.ahead)]-2*rmspe, start = c(2026, 8), freq=12)
+ xx  = c(time(low), rev(time(upp)))
+ yy  = c(low, rev(upp))
+polygon(xx, yy, border=8, col=gray(.5, alpha = .3))
+abline(v=2026+7/12, lty=3)
+
+
+
+
+tsplot(y, type='o', main='', ylab='Alcohol Sales', xlim=c(2025,2027.6))
+upp  = ts(y[(num+1):(num+n.ahead)]+2*rmspe, start = c(2026, 8), freq=12)
+low  = ts(y[(num+1):(num+n.ahead)]-2*rmspe, start = c(2026, 8), freq=12)
+ xx  = c(time(low), rev(time(upp)))
+ yy  = c(low, rev(upp))
+polygon(xx, yy, border=8, col=gray(.5, alpha = .3))
+abline(v=2026+7/12, lty=3)
+```
