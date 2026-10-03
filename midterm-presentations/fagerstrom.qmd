@@ -1,0 +1,164 @@
+---
+title: "Midterm Project"
+author: "Emily Fagerstrom"
+format: revealjs
+editor: source
+toc: true
+toc-depth: 1
+slide-number: true
+smaller: false
+scrollable: true 
+execute:
+  echo: true
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r, echo=FALSE}
+library(tuneR)
+library(av)
+library(tidyverse)
+```
+
+
+# Cross Correlation
+
+
+## Stereo Sound: Left and Right
+
+- Two independent time series ($L_t$ and $R_t$) trick your brain 
+- Share a lot of information (usually all instruments sent to both)
+- Thus, waveforms look close to identical; minor tweaks
+
+## Monocompatibility
+
+- If left and right channels get out of phase, the waves can cancel each other
+- If song is played on a smartphone or bluetooth speaker (in mono), sound can vanish
+- Correlation analysis to check mixes are "mono-compatible"
+
+## Stereo Tricks
+
+- Don't want the left and right channels to be identical (boring)
+- Haas effect: delay a sound in one channel by a few milliseconds
+- Idea: look for a lag peak to see the tricks used by the mixing engineer
+
+## Live vs Recorded (vs Remastered)
+
+- Dowload Goo Goo Dolls "Slide" from youtube
+- Original
+- "Remastered"
+- Live in Buffalo July 4, 2004
+
+
+![](GooGooDollsIris-1){width=50%}
+
+## Fun fact!  44100 Hz
+
+- Limit for healthy hearing: $\approx$ 20 kHz
+- Nyquist-Shannon Sampling Them: sample at more than twice the highest frequency you want to record
+- Want a little bit of "breathing" room (especially with 1970s analog technology)
+- American and European TV were different (30 frames per second vs 25)
+- wanted something with a lot of integer factors to cleanly divide audio samples across video frames
+- $44,100 = 2^2 \times 3^2 \times 5^2 \times 7^2$
+- Sony pitched Compact Disc standard in 1980; locked in now
+
+## CCFs
+
+```{r}
+song_og <- readMP3("Slide.mp3")
+song_remastered <- readMP3("Slide-Remastered.mp3")
+song_live <- readMP3("Slide-Live.mp3")
+
+# Sampling rate (double check it is the usual 44100 Hz)
+fs <- song_og@samp.rate
+print(paste("Sampling Rate:", fs, "Hz"))
+
+# Tiny smidgin of chorus: "yeaaaah we're gonna let it slide"
+start_sec <- 44.2
+duration_sec <- 3
+
+# Sample indices
+start_sample <- start_sec * fs
+end_sample <- (start_sec + duration_sec) * fs
+
+# Left and Right channels
+og_left <- song_og@left[start_sample:end_sample]
+og_right <- song_og@right[start_sample:end_sample]
+
+#L/R Live version
+live_left <- song_live@left[start_sample:end_sample]
+live_right <- song_live@right[start_sample:end_sample]
+
+#L/R Remastered version
+rem_left <- song_remastered@left[start_sample:end_sample]
+rem_right <- song_remastered@right[start_sample:end_sample]
+
+
+
+
+chorus_stereo <- Wave(left = og_left, 
+                      right = og_right, 
+                      bit = 16, 
+                      samp.rate = fs)
+
+writeWave(chorus_stereo, filename = "yeeaaah.wav")
+
+
+```
+
+
+<audio controls>
+  <source src="yeeaaah.wav" type="audio/wav">
+</audio>
+
+
+## CCFs
+
+```{r}
+#| output-location: slide
+#| fig-width: 8
+#| fig-height: 9
+#| out-width: "100%"
+
+par(mfrow = c(3, 1))
+
+ccf_og <- ccf(og_left, og_right, lag.max = 100, 
+               main = "CCF: Original (?)",
+               ylab = "CCF", col = "blue", lwd = 2)
+
+ccf_rem <- ccf(rem_left, rem_right, lag.max = 100, 
+               main = "CCF: Remastered Version",
+               ylab = "CCF", col = "red", lwd = 2)
+
+ccf_live <- ccf(live_left, live_right, lag.max = 100, 
+                main = "CCF: Live Version",
+                ylab = "CCF", col = "green", lwd = 2)
+
+# reset layout
+par(mfrow = c(1, 1))
+
+```
+
+
+## CCFs: Remastered
+
+![](Loudness-wiki){width=75%}
+
+## CCFS: Live Version (Outdoor)
+
+- Smoother: Lots of random continuous background noise
+- Negative correlation: peak in the left channel is starting to line up with trough in the right channel
+- Lag of 89 relevance:
+
+$\Delta t = \frac{89}{44100} \approx .00202 \,\,\mathrm{seconds}$
+
+- Sound travels through open air at about 1125 feet / second
+
+$1125 \,\, \mathrm{ft/sec} \times .00202 \,\, \mathrm{seconds} \approx 2.27 \,\, \mathrm{feet}$
+
+- The distance between stage mics was about 2.27 feet
+
+- Somebody/something loud was possibly closer to one mic than the other.
+
+
+##
