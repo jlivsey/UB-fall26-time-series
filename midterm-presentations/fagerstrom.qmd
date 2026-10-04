@@ -1,5 +1,5 @@
 ---
-title: "Midterm Project"
+title: "Midterm: Slide Deck"
 author: "Emily Fagerstrom"
 format: revealjs
 editor: source
@@ -16,13 +16,16 @@ editor_options:
 
 ```{r, echo=FALSE}
 library(tuneR)
-library(av)
 library(tidyverse)
+library(ggplot2)
+library(gganimate) #for the animation with the sound
+library(forecast)
+
+
 ```
 
 
 # Cross Correlation
-
 
 ## Stereo Sound: Left and Right
 
@@ -35,12 +38,6 @@ library(tidyverse)
 - If left and right channels get out of phase, the waves can cancel each other
 - If song is played on a smartphone or bluetooth speaker (in mono), sound can vanish
 - Correlation analysis to check mixes are "mono-compatible"
-
-## Stereo Tricks
-
-- Don't want the left and right channels to be identical (boring)
-- Haas effect: delay a sound in one channel by a few milliseconds
-- Idea: look for a lag peak to see the tricks used by the mixing engineer
 
 ## Live vs Recorded (vs Remastered)
 
@@ -56,13 +53,13 @@ library(tidyverse)
 
 - Limit for healthy hearing: $\approx$ 20 kHz
 - Nyquist-Shannon Sampling Them: sample at more than twice the highest frequency you want to record
-- Want a little bit of "breathing" room (especially with 1970s analog technology)
+- Sound engineers want a little bit of "breathing" room (especially with 1970s analog technology)
 - American and European TV were different (30 frames per second vs 25)
-- wanted something with a lot of integer factors to cleanly divide audio samples across video frames
+- Want a number with a lot of factors to cleanly divide audio samples across video frames
 - $44,100 = 2^2 \times 3^2 \times 5^2 \times 7^2$
 - Sony pitched Compact Disc standard in 1980; locked in now
 
-## CCFs
+## CCFs (left and right channels)
 
 ```{r}
 song_og <- readMP3("Slide.mp3")
@@ -112,7 +109,7 @@ writeWave(chorus_stereo, filename = "yeeaaah.wav")
 </audio>
 
 
-## CCFs
+## CCFs (left and right channels)
 
 ```{r}
 #| output-location: slide
@@ -144,21 +141,158 @@ par(mfrow = c(1, 1))
 
 ![](Loudness-wiki){width=75%}
 
-## CCFS: Live Version (Outdoor)
 
-- Smoother: Lots of random continuous background noise
-- Negative correlation: peak in the left channel is starting to line up with trough in the right channel
-- Lag of 89 relevance:
+# Autocorrelation
 
-$\Delta t = \frac{89}{44100} \approx .00202 \,\,\mathrm{seconds}$
+## Note Detection using Rolling Variance
 
-- Sound travels through open air at about 1125 feet / second
+- Intro (first 9 seconds)
+- Look at *small* snippets (1024 frames; .23 seconds each)
+- Check the variance of each piece
+- Places with high variance are likely to be the onset of the next note
 
-$1125 \,\, \mathrm{ft/sec} \times .00202 \,\, \mathrm{seconds} \approx 2.27 \,\, \mathrm{feet}$
+## Note Detection using Rolling Variance
 
-- The distance between stage mics was about 2.27 feet
+```{r}
+rm(list = setdiff(ls(), "song_og"))
 
-- Somebody/something loud was possibly closer to one mic than the other.
+# audio clip (left channel; intro)
+intro_left <- song_og@left[1:(44100 * 9)]
+```
+
+```{r}
+#| eval: false
+
+# Run this code to create the .mov, but then don't actually run it during the slides, just grab the animation it produced
+
+writeWave(Wave(left = intro_left, samp.rate = 44100, bit = 16), "intro_clip.wav")
+
+# rolling variance dataframe
+# (doesn't need to be power of 2 for this purpose;
+# but that is usually how things are chunked in audio world to allow for FFTs) 
+frame_size <- 1024
+n_frames <- floor(length(intro_left) / frame_size)
+frames <- matrix(intro_left[1:(n_frames * frame_size)], nrow = frame_size)
+frame_vars <- apply(frames, 2, var)
+frame_times <- (seq_along(frame_vars) * frame_size) / 44100
+df_variance <- data.frame(time = frame_times, variance = frame_vars)
+
+# rolling variance plot and animation
+p <- ggplot(df_variance, aes(x = time, y = variance)) +
+  geom_line(color = "purple", linewidth = 1) +
+  theme_minimal() +
+  labs(
+    title = "Note Onset Detection: Intro Riff",
+    subtitle = "Time: {frame_along} seconds",
+    x = "Time (Seconds)", 
+    y = "Variance (Signal Energy)"
+  )
+
+anim <- p + transition_reveal(time)
+
+# combine animation and audio
+animate(anim, 
+        nframes = 180, 
+        fps = 20, 
+        renderer = av_renderer(file = "variance_video.mp4", audio = "intro_clip.wav"))
+
+```
 
 
-##
+## Note Detection using Rolling Variance
+
+{{< video variance_video.mp4 width="700" >}}
+
+## Pitch Detection using ACF
+
+First note of the song (.7 to .9 sec)
+
+```{r}
+# Starting note
+note_start_sec <- .7
+note_end_sec <- .9
+
+note_segment <- intro_left[(note_start_sec * 44100):(note_end_sec * 44100)]
+writeWave(Wave(left = note_segment, samp.rate = 44100, bit = 16), "first_note.wav")
+
+# ACF
+acf(note_segment, lag.max = 300, 
+    main = "ACF (a single note)",
+    col = "blue", lwd = 2)
+
+# PACF
+pacf(note_segment, lag.max = 300, 
+    main = "PACF (a single note)",
+    col = "blue", lwd = 2)
+
+
+```
+
+## Pitch Detection using ACF
+- At lag 251, autocorrelation is almost 1
+- $44100/250 \approx 175.697 \approx F$
+
+
+```{r}
+#| eval: false
+
+
+freq <- 175.7
+duration <- 1
+sample_rate <- 44100
+
+t <- seq(0, duration, 1 / sample_rate)
+wave <- sin(2 * pi * freq * t)
+
+wav <- Wave(
+  left = as.integer(wave * 32767),
+  samp.rate = sample_rate,
+  bit = 16
+)
+
+writeWave(wav, "176Hz.wav")
+
+```
+
+The intro (left channel):
+
+<audio controls>
+  <source src="intro_clip.wav" type="audio/wav">
+</audio>
+
+The first note (.7 to .9 sec):
+
+<audio controls>
+  <source src="first_note.wav" type="audio/wav">
+</audio>
+
+A 175.7 Hz sound wave:
+
+<audio controls>
+  <source src="176Hz.wav" type="audio/wav">
+</audio>
+
+
+
+```{r}
+plot(note_segment, type="l")
+
+spec.pgram(note_segment,
+           Fs = 44100,
+           log = "no")
+
+
+fit <- Arima(note_segment,
+             order = c(20, 0, 0),
+             include.mean = TRUE)
+
+summary(fit)
+
+
+ar_coefs <- coef(fit)[grep("^ar", names(coef(fit)))]
+
+```
+
+
+
+
