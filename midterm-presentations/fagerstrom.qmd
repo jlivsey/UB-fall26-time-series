@@ -154,7 +154,7 @@ par(mfrow = c(1, 1))
 ## Note Detection using Rolling Variance
 
 ```{r}
-rm(list = setdiff(ls(), "song_og"))
+rm(list = setdiff(ls(), c("song_og","fs")))
 
 # audio clip (left channel; intro)
 intro_left <- song_og@left[1:(44100 * 9)]
@@ -203,6 +203,122 @@ animate(anim,
 
 {{< video variance_video.mp4 width="700" >}}
 
+
+## Quick digression: music frequencies
+
+- Pure sine wave
+- $\sin(t)$: period $2\pi$, frequency $1/2\pi$
+- $\sin(2 \pi t)$: period $1$, frequency $1$
+- $\sin( 2 \pi \cdot 440 t)$: frequency 440, "440 A"
+
+A 440 Hz sound wave (sine)
+
+<audio controls>
+  <source src="440Hz.wav" type="audio/wav">
+</audio>
+
+
+## Quick digression: musical frequencies
+
+- Double the frequency
+- Same note ("pitch") but higher
+
+![](piano){width=75%}
+
+
+A 2200 Hz sound wave (sine)
+
+<audio controls>
+  <source src="2200Hz.wav" type="audio/wav">
+</audio>
+
+A 440 Hz sound wave (sine)
+
+<audio controls>
+  <source src="440Hz.wav" type="audio/wav">
+</audio>
+
+
+
+```{r}
+#| label: fig-sine-waves
+#| fig-cap: "Sine waves at 220 Hz and 440 Hz"
+#| fig-width: 8
+#| fig-height: 4.5
+
+library(ggplot2)
+
+t <- seq(0, 0.005, by = 0.00001)
+
+waves <- data.frame(
+  time = rep(t, 2),
+  amplitude = c(
+    sin(2 * pi * 220 * t),
+    sin(2 * pi * 440 * t)
+  ),
+  frequency = factor(
+    rep(c(220, 440), each = length(t)),
+    levels = c(220, 440),
+    labels = c("220 Hz", "440 Hz")
+  )
+)
+
+ggplot(waves, aes(x = time, y = amplitude, color = frequency)) +
+  geom_line(linewidth = 1) +
+  scale_color_manual(
+    values = c("220 Hz" = "blue", "440 Hz" = "red")
+  ) +
+  labs(
+    title = "Pure Sine Waves",
+    subtitle = "Comparing 220 Hz and 440 Hz",
+    x = "Time (seconds)",
+    y = "Amplitude",
+    color = "Frequency"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title = element_text(face = "bold", size = 17),
+    plot.subtitle = element_text(color = "gray40"),
+    legend.position = "top",
+    panel.grid.minor = element_blank()
+  )
+```
+
+## Quick (I swear) digression: musical frequencies
+
+- Rest of the notes
+- 12 notes that repeat
+
+![](numbered-notes){width=75%}
+
+
+$440 \cdot 2^{n/12} $
+
+
+
+
+
+## Quick side quest: music frequencies
+
+
+
+
+```{r}
+n <- seq(1,24,1)
+freqs <- round(110*2^(n/12),3)
+notes<-rep(c("Bf", "B", "C", "Df", "D", "Ef", "E", "F", "Gf", "G", "Af","A"),2)
+cbind(freqs,notes)
+```
+
+
+
+
+
+
+
+
+
+
 ## Pitch Detection using ACF
 
 First note of the song (.7 to .9 sec)
@@ -228,9 +344,6 @@ pacf(note_segment, lag.max = 300,
 
 ```
 
-## Pitch Detection using ACF
-- At lag 251, autocorrelation is almost 1
-- $44100/250 \approx 175.697 \approx F$
 
 
 ```{r}
@@ -245,54 +358,338 @@ t <- seq(0, duration, 1 / sample_rate)
 wave <- sin(2 * pi * freq * t)
 
 wav <- Wave(
-  left = as.integer(wave * 32767),
+  left = as.integer(wave * 32767), #this is max volume in 16-bit audio
   samp.rate = sample_rate,
   bit = 16
 )
 
 writeWave(wav, "176Hz.wav")
 
+
+freq <- 440
+duration <- 1
+sample_rate <- 44100
+
+t <- seq(0, duration, 1 / sample_rate)
+wave <- sin(2 * pi * freq * t)
+
+wav <- Wave(
+  left = as.integer(wave * 32767), 
+  samp.rate = sample_rate,
+  bit = 16
+)
+
+writeWave(wav, "440Hz.wav")
+
+
+freq <- 220
+duration <- 1
+sample_rate <- 44100
+
+t <- seq(0, duration, 1 / sample_rate)
+wave <- sin(2 * pi * freq * t)
+
+wav <- Wave(
+  left = as.integer(wave * 32767), 
+  samp.rate = sample_rate,
+  bit = 16
+)
+
+writeWave(wav, "220Hz.wav")
+
 ```
 
-The intro (left channel):
+
+## Pitch Detection using ACF
+- At lag 251, autocorrelation is almost 1
+- $44100/250 \approx 175.697 \approx F$
+
+## Pitch Detection using ACF
+
+
+## Pitch Detection using ACF
+
+The intro (left channel)
 
 <audio controls>
   <source src="intro_clip.wav" type="audio/wav">
 </audio>
 
-The first note (.7 to .9 sec):
+The first note (.7 to .9 sec)
 
 <audio controls>
   <source src="first_note.wav" type="audio/wav">
 </audio>
 
-A 175.7 Hz sound wave:
+A 175.7 Hz sound wave (sine)
 
 <audio controls>
   <source src="176Hz.wav" type="audio/wav">
 </audio>
 
 
+# ???
+
+## Other time series
+
+- One channel of a three-minute song, is a long time series with
+
+$3 \times 60 \times 44100 = 7,938,000$
+
+- Instead, break into pieces of size 8192
+(powers of 2 are helpful for FT)
+- Each piece is about .186 seconds of song
+- Aggregate within each .186 second piece
+
+## Other time series
 
 ```{r}
-plot(note_segment, type="l")
 
-spec.pgram(note_segment,
-           Fs = 44100,
-           log = "no")
+# put into mono
+mono_og <- rowMeans(cbind(song_og@left, song_og@right))
 
-
-fit <- Arima(note_segment,
-             order = c(20, 0, 0),
-             include.mean = TRUE)
-
-summary(fit)
+# get rid of silence at the beginning
+first_nonzero <- which(mono_og != 0)[1]
+first_chunk_start <- first_nonzero
+mono_og <- mono_og[first_chunk_start:length(mono_og)]
 
 
-ar_coefs <- coef(fit)[grep("^ar", names(coef(fit)))]
+# 2048 -> about .046 sec; 4096 -> .092; could bump to 8192?
+chunk_size <- 8192
+n_chunks <- floor(length(mono_og) / chunk_size)
+
+mono_trim <- mono_og[1:(n_chunks * chunk_size)]
+
+chunks <- matrix(
+  mono_trim,
+  nrow = chunk_size,
+  ncol = n_chunks
+)
+
+dim(chunks)
+
+
+# RMS (root mean squared) amplitude, (sqrt of sum of squares, measures overall energy)
+
+rms <- apply(chunks, 2, function(z) {
+  sqrt(mean(z^2))
+})
+
+# max amplitude
+
+max_amp <- apply(chunks, 2, function(z) {
+  max(abs(z))
+})
+
+# standard deviation / variance
+
+sd_amp <- apply(chunks, 2, sd)
+var_amp <- apply(chunks, 2, var)
+
+# spectral centroid
+
+spectral_centroid <- function(z, fs) {
+  
+  n <- length(z)
+  
+  # FFT
+  fft_z <- fft(z)
+  
+  # Only keep positive frequencies
+  half <- floor(n / 2) + 1
+  
+  magnitude <- Mod(fft_z[1:half])
+  
+  frequencies <- (0:(half - 1)) * fs / n
+  
+  sum(frequencies * magnitude) / sum(magnitude)
+}
+
+centroid <- apply(
+  chunks,
+  2,
+  spectral_centroid,
+  fs = fs
+)
+
+# spectral bandwidth
+
+spectral_bandwidth <- function(z, fs) {
+  
+  n <- length(z)
+  
+  fft_z <- fft(z)
+  
+  half <- floor(n / 2) + 1
+  
+  magnitude <- Mod(fft_z[1:half])
+  
+  frequencies <- (0:(half - 1)) * fs / n
+  
+  centroid <- sum(frequencies * magnitude) / sum(magnitude)
+  
+  sqrt(
+    sum(magnitude * (frequencies - centroid)^2) /
+      sum(magnitude)
+  )
+}
+
+bandwidth <- apply(
+  chunks,
+  2,
+  spectral_bandwidth,
+  fs = fs
+)
+
+
+# spectral entropy
+
+spectral_entropy <- function(z) {
+  
+  n <- length(z)
+  
+  fft_z <- fft(z)
+  
+  half <- floor(n / 2) + 1
+  
+  magnitude <- Mod(fft_z[1:half])
+  
+  # Convert to probability distribution
+  p <- magnitude / sum(magnitude)
+  
+  # Avoid log(0)
+  p <- p[p > 0]
+  
+  -sum(p * log(p))
+}
+
+entropy <- apply(
+  chunks,
+  2,
+  spectral_entropy
+)
+
+
+# zero crossing rate
+
+zero_crossings <- function(z) {
+  
+  sum(z[-1] * z[-length(z)] < 0)
+}
+
+zcr <- apply(
+  chunks,
+  2,
+  zero_crossings
+)
 
 ```
 
 
+## Other time series
+
+
+
+```{r}
+
+chunk_time <- ((1:n_chunks) - 1) * chunk_size / fs
+
+plot(
+  chunk_time,
+  rms,
+  type = "l",
+  xlab = "Time (seconds)",
+  ylab = "RMS amplitude",
+  main = "RMS amplitude over time"
+)
+
+
+plot(
+  chunk_time,
+  max_amp,
+  type = "l",
+  xlab = "Time (seconds)",
+  ylab = "Maximum absolute amplitude",
+  main = "Maximum amplitude over time"
+)
+
+
+plot(
+  chunk_time,
+  sd_amp,
+  type = "l",
+  xlab = "Time (seconds)",
+  ylab = "Standard deviation",
+  main = "Amplitude SD over time"
+)
+
+
+plot(
+  chunk_time,
+  centroid,
+  type = "l",
+  xlab = "Time (seconds)",
+  ylab = "Frequency (Hz)",
+  main = "Spectral centroid over time"
+)
+
+
+plot(
+  chunk_time,
+  bandwidth,
+  type = "l",
+  xlab = "Time (seconds)",
+  ylab = "Bandwidth (Hz)",
+  main = "Spectral bandwidth over time"
+)
+
+plot(
+  chunk_time,
+  entropy,
+  type = "l",
+  xlab = "Time (seconds)",
+  ylab = "Spectral entropy",
+  main = "Spectral entropy over time"
+)
+
+plot(
+  chunk_time,
+  zcr,
+  type = "l",
+  xlab = "Time (seconds)",
+  ylab = "Zero crossings",
+  main = "Zero-crossing rate over time"
+)
+```
+
+
+## Other time series
+
+
+
+```{r}
+
+features <- data.frame(
+  time = chunk_time,
+  rms = rms,
+  max_amp = max_amp,
+  sd = sd_amp,
+  centroid = centroid,
+  bandwidth = bandwidth,
+  entropy = entropy,
+  zcr = zcr
+)
+
+head(features)
+
+
+library(forecast)
+rms_ts <- ts(rms, frequency = fs / chunk_size)
+
+fit <- auto.arima(rms_ts)
+
+summary(fit)
+
+```
 
 
