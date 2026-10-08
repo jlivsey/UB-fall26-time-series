@@ -6,6 +6,10 @@
 /slides/01-basics/01-basics_files
 /slides/02-decomp/02-decomp_files
 /slides/03-regression/03-regression_files
+/slides/03-regression/03b-regression-lagged-applications_cache
+/slides/03-regression/03b-regression-lagged-applications_files
+/slides/03-regression/03c-regression-predictors-applications_cache
+/slides/03-regression/03c-regression-predictors-applications_files
 /slides/04-arima/04-arima_files
 /slides/04-arima/04-arima_cache
 /slides/09*
@@ -19,3 +23,4 @@
 /slides/06-regARIMA/06-regARIMA_files
 /slides/08-statespace/08b-statespaceapplications_cache
 /slides/08-statespace/08b-statespaceapplications_files
+/student-work
