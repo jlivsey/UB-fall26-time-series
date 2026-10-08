@@ -1,0 +1,409 @@
+---
+title: "Are NYC Collisions Trending Since April 2020?"
+subtitle: "STA 571 Midterm: ARIMA vs. State-Space Models"
+format:
+  revealjs:
+    theme: simple
+    slide-number: true
+    code-line-numbers: false
+    smaller: true
+    fig-width: 9
+    fig-height: 4.5
+execute:
+  echo: false
+  warning: false
+  message: false
+  cache: true
+---
+
+```{r}
+#| label: setup
+library(fpp3); library(astsa); library(tidyverse); library(forecast)
+theme_set(theme_minimal(base_size = 14))
+```
+
+# Data
+
+## Question and data
+
+```{r}
+#| label: load
+wk_covid <- read_csv("~/wkly_boro", show_col_types = FALSE) |>
+  select(-1) |>
+  mutate(borough = replace_na(borough, "UNKNOWN"), non = n_crashes - inj_accident) |>
+  filter(week < max(week)) |>
+  mutate(week = yearweek(week)) |>
+  as_tsibble(index = week, key = borough)
+
+citywide <- wk_covid |>
+  index_by(week) |>
+  summarise(wk_crash= sum(n_crashes))
+plot(as.Date(citywide$week), citywide$wk_crash, type = 'l', xlab = "Year", ylab = "Weekly Crash Count")
+
+```
+
+- **Question:** since the April 2020 reporting change, is there a trend in weekly NYC motor-vehicle collisions?
+- **Source:** NYPD collisions, aggregated to weekly counts by borough.
+- **Series:** weekly crashes grouped by Borough
+- On **Apr 6, 2020** NYPD changed non-injury reporting, which creates a structural break. Analysis therefore uses **2021 onward**.
+
+```{r}
+citywide <- wk_covid |>
+  index_by(week) |>
+  summarise(inj = sum(inj_accident), non = sum(non))
+```
+
+## Reporting policy break
+
+```{r}
+citywide |>
+  as_tibble() |>
+  pivot_longer(c(inj, non), names_to = "type") |>
+  mutate(type = recode(type, inj = "Injury", non = "Non-injury")) |>
+  ggplot(aes(as.Date(week), value, colour = type)) +
+  geom_line() +
+  geom_vline(xintercept = as.Date("2020-04-06"), linetype = 2) +
+  labs(x = NULL, y = "Weekly crashes", colour = NULL,
+       title = "Dashed line: non-injury reporting policy (Apr 6, 2020)") +
+  theme(legend.position = "bottom")
+```
+
+## Post-2020 data: citywide and by borough
+
+```{r}
+#| label: load-post
+wk <- read_csv("~/post_covid_wk_boro", show_col_types = FALSE) |>
+  select(-1) |>
+  mutate(week = as_date(week), borough = replace_na(borough, "UNKNOWN")) |>
+  filter(week > min(week), week < max(week))
+
+# full citywide series (kept for scoring the holdout) and the modelling window
+total_all <- wk |> group_by(week) |> summarise(n_crashes = sum(n_crashes), .groups = "drop")
+total <- total_all |> filter(week > as.Date("2021-01-01"), week < as.Date("2026-01-01"))
+total_ts <- total |> mutate(week = yearweek(week)) |> as_tsibble(index = week)
+
+p1 <- ggplot(total, aes(week, n_crashes)) + geom_line() + geom_smooth(method = "lm") +
+  labs(x = NULL, y = "Crashes / week", title = "Citywide")
+p2 <- ggplot(wk, aes(week, n_crashes, colour = borough)) + geom_line() +
+  labs(x = NULL, y = NULL, colour = NULL, title = "By borough") + facet_wrap(~borough)+theme(legend.position = "bottom")
+library(patchwork); p1 + p2
+```
+
+## Seasonality
+
+```{r}
+total_ts |> gg_season(n_crashes, period = "year") + labs(x = NULL, y = "Crashes / week")
+```
+
+## Raw ACF/PACF
+
+```{r}
+par(mfrow = c(1, 3), mar = c(4, 4, 2, 1))
+plot(log(total$n_crashes), type = "l", main = "log crashes", ylab = "", xlab = "week")
+acf(log(total$n_crashes), lag.max = 104, main = "ACF"); pacf(log(total$n_crashes), lag.max = 104, main = "PACF")
+
+```
+
+## Differencing and ACF/PACF
+
+```{r}
+#| fig-height: 3.5
+library(tseries)
+d <- diff(log(total$n_crashes))
+adf.test(d)
+par(mfrow = c(1, 3), mar = c(4, 4, 2, 1))
+plot(d, type = "l", main = "Differenced log crashes", ylab = "", xlab = "week")
+acf(d, lag.max = 104, main = "ACF"); pacf(d, lag.max = 104, main = "PACF")
+```
+
+Differencing the log series to make it look stationary and reduce the variance. The ACF cuts off after lag 1 and the PACF decays (indicating a MA(1)). The PACF also shows seasonal spikes at lag 52, representing a seasonal AR(1) component.
+
+# Models
+
+## Model 1: seasonal ARIMA with trend
+
+Let $y_t=\log(\text{crashes}_t)$ and $B$ the backshift operator. We fit
+
+$$\Phi(B^{52})\,(1-B)\,(y_t-\delta t)=\Theta(B)\,\varepsilon_t,\qquad \varepsilon_t\sim N(0,\sigma^2)$$
+
+- Chosen model: $\text{ARIMA}(0,1,1)(1,0,0)_{52}$ with a linear trend $\delta$.
+- $\delta$ is the **weekly log growth rate**: the answer to our trend question.
+- Annual % change $=100\,(e^{52.18\,\delta}-1)$.
+
+## Model 2: state-space (local level + seasonal)
+
+$$y_t = \underbrace{\mu_t}_{\text{level}} + \underbrace{s_t}_{\text{season}} + v_t,\quad v_t\sim N(0,R)$$
+
+$$\mu_t=\mu_{t-1}+w_{1t},\qquad s_t=-\sum_{j=1}^{51}s_{t-j}+w_{2t}$$
+
+- State vector $x_t=(\mu_t,s_t,\dots,s_{t-50})'$, with $x_t=\Phi x_{t-1}+w_t$ and $y_t=Ax_t+v_t$.
+- Variances $(Q_{11},Q_{22},R)$ estimated by maximum likelihood via the Kalman filter; the trend is read from the Kalman **smoother**.
+
+## ARIMA: search and diagnostics
+
+```{r}
+#| echo: true
+fit2 <- total_ts |> model(
+  auto = ARIMA(log(n_crashes) ~ trend() + pdq(0:3, 1, 0:3) + PDQ(0:2, 0, 0:2)),
+  test = ARIMA(log(n_crashes) ~ trend() + pdq(0, 1, 1) + PDQ(1, 0, 0)))
+glance(fit2) |> select(.model, AICc, BIC)
+fit2 |> select(auto) |> report()
+```
+
+## ARIMA residuals
+
+```{r}
+fit2 |> select(test) |> gg_tsresiduals()
+augment(fit2) |> filter(.model == "test") |>
+  features(.innov, ljung_box, lag = 26, dof = 3)
+```
+
+## Side Note - ARIMA with Holiday Variable
+
+```{r}
+#| echo: true
+total_hol <- total_ts |>
+  mutate(md = format(as.Date(week), "%m-%d"),
+         holiday = as.integer(md >= "12-20" | md <= "01-03"))
+
+fit_hol <- total_hol |>
+  model(
+    with_holiday = ARIMA(log(n_crashes) ~ trend() + holiday + pdq(0, 1, 1) + PDQ(1, 0, 0)),
+    no_holiday   = ARIMA(log(n_crashes) ~ trend() + pdq(0, 1, 1) + PDQ(1, 0, 0))
+  )
+
+glance(fit_hol) |> select(.model, AICc, BIC)
+tidy(fit_hol) |> filter(.model == "with_holiday", term %in% c("holiday", "trend()"))
+fit_hol |> select(with_holiday) |> gg_tsresiduals()
+augment(fit_hol) |> filter(.model == "with_holiday") |>
+  features(.innov, ljung_box, lag = 26, dof = 3)
+```
+
+Holiday weeks have \~9% fewer crashes and AICc improves by 10.
+
+Passes Ljung-Box test
+
+Forecasts use the base ARIMA for comparison with the state space
+
+## Fitting the ARIMA used for forecasting
+
+```{r}
+#| echo: true
+y  <- log(total$n_crashes); n <- length(y); tt <- 1:n
+fit_trend <- Arima(y, order = c(0, 1, 1),
+                   seasonal = list(order = c(1, 0, 0), period = 52), xreg = tt)
+fit_trend
+```
+
+## Is there a trend? (ARIMA)
+
+```{r}
+#| echo: true
+b  <- coef(fit_trend)[["xreg"]]
+se <- sqrt(diag(vcov(fit_trend)))[["xreg"]]
+ann <- 100 * (exp(52.18 * (b + c(est = 0, lo = -1.96, hi = 1.96) * se)) - 1)
+round(ann, 1)   # annual % change with 95% CI
+```
+
+## State-space fit
+
+```{r}
+#| echo: true
+y  <- log(total$n_crashes); m <- 52
+Phi <- matrix(0, m, m); Phi[1, 1] <- 1; Phi[2, 2:m] <- -1
+for (i in 3:m) Phi[i, i - 1] <- 1
+A  <- matrix(c(1, 1, rep(0, m - 2)), nrow = 1)
+mu0 <- c(mean(y[1:4]), rep(0, m - 1)); Sigma0 <- diag(c(1, rep(0.1, m - 1)))
+mkQ <- function(p) { Q <- diag(0, m); Q[1, 1] <- exp(p[1]); Q[2, 2] <- exp(p[2]); Q }
+
+nll  <- function(p, yy) Kfilter(yy, A, mu0, Sigma0, Phi, mkQ(p), exp(p[3]))$like
+est0 <- optim(log(c(0.03, 0.01, 0.05)), nll, yy = y, method = "BFGS")
+setNames(exp(est0$par), c("sd_level", "sd_season", "sd_obs"))
+```
+
+The variance of observation noise (week-to-week randomness) dominates at about 3.5% per week. The level and seasonal variances are around 1.3% per week each, suggesting a slow drift rather than staying fixed.
+
+## Smoothed trend
+
+```{r}
+ks <- Ksmooth(y, A, mu0, Sigma0, Phi, mkQ(est0$par), exp(est0$par[3]))
+level <- as.numeric(ks$Xs[1, , ]); season <- as.numeric(ks$Xs[2, , ])
+se_lvl <- sqrt(ks$Ps[1, 1, ]); dates <- total$week
+
+ggplot(tibble(dates, actual = total$n_crashes, trend = exp(level), fit = exp(level + season),
+              lo = exp(level - 1.96 * se_lvl), hi = exp(level + 1.96 * se_lvl)), aes(dates)) +
+  geom_line(aes(y = actual), colour = "grey65") +
+  geom_ribbon(aes(ymin = lo, ymax = hi), fill = "firebrick", alpha = .2) +
+  geom_line(aes(y = trend), colour = "firebrick", linewidth = 1.2) +
+  geom_line(aes(y = fit), colour = "steelblue", linetype = 2) +
+  labs(x = NULL, y = "Crashes / week",
+       title = "Smoothed trend (red, 95% band) and trend + seasonal (blue, dashed)")
+```
+
+## Is there a trend? (state space)
+
+```{r}
+#| echo: true
+first_lvl <- mean(level[1:13]); last_lvl <- mean(tail(level, 13))
+tibble(start = exp(first_lvl), end = exp(last_lvl),
+       pct_change = round(100 * (exp(last_lvl - first_lvl) - 1), 1))
+
+se_first <- sqrt(mean(ks$Ps[1, 1, 1:13]))
+se_last  <- sqrt(mean(tail(ks$Ps[1, 1, ], 13)))
+se_diff  <- sqrt(se_first^2 + se_last^2)
+d <- last_lvl - first_lvl
+round(100 * (exp(d + c(est = 0, lo = -1.96, hi = 1.96) * se_diff) - 1), 1)
+```
+
+State Space model predicts a smoothed decrease in number of crashes to be approximately 15% from January 2021 to December 2025 (\~3% drop per year). Both models predict a decreasing trend in the number of crashes.
+
+# Borough Effect
+
+## Estimated Borough Effect (ARIMA)
+
+```{r}
+
+boro_ts <- wk |>
+  filter( week > as.Date("2021-01-01"), week < as.Date("2026-01-01")) |>
+  mutate(week = yearweek(week)) |>
+  as_tsibble(index = week, key = borough)
+
+fit_b <- boro_ts |>
+  model(ARIMA(log(n_crashes) ~ trend() + pdq(0, 1, 1) + PDQ(1, 0, 0)))
+
+boro_trend <- tidy(fit_b) |>
+  filter(term == "trend()") |>
+  transmute(borough,
+            annual_pct = 100 * (exp(52.18 * estimate) - 1),
+            lo = 100 * (exp(52.18 * (estimate - 1.96 * std.error)) - 1),
+            hi = 100 * (exp(52.18 * (estimate + 1.96 * std.error)) - 1))
+ggplot(boro_trend, aes(annual_pct, reorder(borough, annual_pct))) +
+  geom_pointrange(aes(xmin = lo, xmax = hi)) +
+  geom_vline(xintercept = 0, linetype = 2) +
+  labs(x = "Annual % change in weekly crashes (95% CI)", y = NULL,
+       title = "Does every borough share the citywide trend?")
+```
+
+## Borough Effect (state space)
+
+```{r}
+wk_win <- wk |> filter(week > as.Date("2021-01-01"), week < as.Date("2026-01-01"))
+boros  <- unique(wk_win$borough)
+get_y  <- function(b) log(wk_win$n_crashes[wk_win$borough == b])
+
+fit_ss <- function(yl) {
+  mu0 <- c(mean(yl[1:4]), rep(0, m - 1)); s <- sd(diff(yl))
+  f <- function(p) Kfilter(yl, A, mu0, Sigma0, Phi, mkQ(p), exp(p[3]))$like
+  est <- optim(log(c(.3, .1, .5) * s), f, method = "BFGS", control = list(maxit = 500))
+  ks <- Ksmooth(yl, A, mu0, Sigma0, Phi, mkQ(est$par), exp(est$par[3]))
+  list(level = ks$Xs[1, , ], se = sqrt(ks$Ps[1, 1, ]))
+}
+res <- map(set_names(boros), \(b) fit_ss(get_y(b)))
+bdates <- sort(unique(wk_win$week))
+
+plot_df <- imap_dfr(res, \(f, b) tibble(
+  borough = b, date = bdates, actual = exp(get_y(b)), trend = exp(f$level),
+  lo = exp(f$level - 1.96 * f$se), hi = exp(f$level + 1.96 * f$se)))
+
+ggplot(plot_df, aes(date)) +
+  geom_line(aes(y = actual), colour = "grey65") +
+  geom_ribbon(aes(ymin = lo, ymax = hi), fill = "firebrick", alpha = .2) +
+  geom_line(aes(y = trend), colour = "firebrick", linewidth = 1) +
+  facet_wrap(~borough, scales = "free_y", ncol = 3) + labs(x = NULL, y = "Crashes / week")
+```
+
+## Borough trend summary
+
+```{r}
+plot_df |> group_by(borough) |>
+  summarise(start = mean(head(trend, 13)), end = mean(tail(trend, 13)),
+            pct_change = round(100 * (end / start - 1), 1)) |>
+  mutate(across(c(start, end), round)) |> knitr::kable()
+```
+
+# Forecasting
+
+## Holdout forecasts (26 weeks into 2026)
+
+```{r}
+H <- 26; n <- length(y)
+fc <- forecast(fit_trend, xreg = (n + 1):(n + H), h = H, level = 95)
+
+# state-space forecast
+kf <- Kfilter(y, A, mu0, Sigma0, Phi, mkQ(est0$par), exp(est0$par[3]))
+x <- matrix(kf$Xf[, , n], ncol = 1); P <- kf$Pf[, , n]
+Q <- mkQ(est0$par)^2; R <- exp(est0$par[3])^2
+ss <- t(sapply(1:H, \(h) {
+  x <<- Phi %*% x; P <<- Phi %*% P %*% t(Phi) + Q
+  mu <- drop(A %*% x); v <- drop(A %*% P %*% t(A)) + R
+  c(pred = mu, lo = mu - 1.96 * sqrt(v), hi = mu + 1.96 * sqrt(v))
+}))
+
+fdates <- max(total$week) + 7 * (1:H)
+all_fc <- bind_rows(
+  tibble(week = fdates, model = "ARIMA", pred = exp(as.numeric(fc$mean)),
+         lo = exp(as.numeric(fc$lower)), hi = exp(as.numeric(fc$upper))),
+  tibble(week = fdates, model = "State space", pred = exp(ss[, "pred"]),
+         lo = exp(ss[, "lo"]), hi = exp(ss[, "hi"]))) |>
+  left_join(total_all, by = "week")
+
+hist_df <- total |> filter(week > max(week) - 7 * 52)
+ggplot() +
+  geom_line(data = hist_df, aes(week, n_crashes), colour = "grey60") +
+  geom_ribbon(data = all_fc, aes(week, ymin = lo, ymax = hi, fill = model), alpha = .15) +
+  geom_line(data = all_fc, aes(week, pred, colour = model), linewidth = 1) +
+  geom_line(data = filter(all_fc, model == "ARIMA"), aes(week, n_crashes), linewidth = .9) +
+  labs(x = NULL, y = "Crashes / week", colour = NULL, fill = NULL,
+       subtitle = "Black = actual; shaded = 95% prediction intervals") +
+  theme(legend.position = "bottom")
+```
+
+## Holdout accuracy
+
+```{r}
+all_fc |> filter(!is.na(n_crashes)) |> group_by(model) |>
+  summarise(weeks = n(), RMSE = sqrt(mean((n_crashes - pred)^2)),
+            MAE = mean(abs(n_crashes - pred)),
+            MAPE = 100 * mean(abs(n_crashes - pred) / n_crashes),
+            bias = mean(pred - n_crashes),
+            coverage = mean(n_crashes >= lo & n_crashes <= hi),
+            width = mean(hi - lo)) |>
+  mutate(across(where(is.numeric), \(x) round(x, 2))) |> knitr::kable()
+```
+
+## Rolling-origin cross-validation
+
+Re-fit both models at several forecast origins (parameters re-estimated for ARIMA, variances held fixed for the state space) and score horizons $h=1,4,13,26$.
+
+```{r}
+#| echo: true
+origins <- seq(n - 130, n - 26, by = 13); hs <- c(1, 4, 13, 26)
+
+cv <- map_dfr(origins, \(o) {
+  yt <- y[1:o]
+  fa <- tryCatch(forecast(Arima(yt, order = c(0, 1, 1),
+          seasonal = list(order = c(1, 0, 0), period = 52), xreg = 1:o),
+          xreg = (o + 1):(o + 26), h = 26)$mean, error = \(e) rep(NA, 26))
+  k <- Kfilter(yt, A, c(mean(yt[1:4]), rep(0, m - 1)), Sigma0, Phi,
+               mkQ(est0$par), exp(est0$par[3]))
+  xs <- matrix(k$Xf[, , o], ncol = 1)
+  fs <- sapply(1:26, \(h) { xs <<- Phi %*% xs; drop(A %*% xs) })
+  tibble(h = hs, actual = y[o + hs], ARIMA = as.numeric(fa)[hs], `State space` = fs[hs])
+}) |> pivot_longer(c(ARIMA, `State space`), names_to = "model", values_to = "pred")
+
+cv |> group_by(model, h) |>
+  summarise(RMSE = sqrt(mean((exp(actual) - exp(pred))^2, na.rm = TRUE)),
+            MAPE = 100 * mean(abs(exp(actual) - exp(pred)) / exp(actual), na.rm = TRUE),
+            .groups = "drop") |>
+  pivot_wider(names_from = model, values_from = c(RMSE, MAPE)) |>
+  mutate(across(where(is.numeric), \(x) round(x, 1))) |> knitr::kable()
+```
+
+# Conclusions
+
+## Takeaways
+
+- **Trend answer:** ARIMA predicted our trend/drift coefficient to be a decrease of 2% of crashes per year. State-space level declined by an overall 15% from 2021 to 2025.
+- **Model comparison:** State Space Model outperformed ARIMA for h = 1 and 26 while ARIMA slightly edged out State Space for h = 4 and 13
+- **Practical use:** weekly crash forecasts for police staffing
+- **Caveats:** the Apr 2020 reporting change, borough "UNKNOWN" records, and no weather or traffic/holiday covariates yet.
