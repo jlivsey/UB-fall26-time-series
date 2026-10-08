@@ -20,6 +20,8 @@ library(tidyverse)
 library(ggplot2)
 library(gganimate) #for the animation with the sound
 library(forecast)
+library(gt) # chat used it to make the table of notes/freqs look nice
+
 
 
 ```
@@ -27,7 +29,7 @@ library(forecast)
 
 # Cross Correlation
 
-## Stereo Sound: Left and Right
+## Stereo Sound
 
 - Two independent time series ($L_t$ and $R_t$) trick your brain 
 - Share a lot of information (usually all instruments sent to both)
@@ -39,9 +41,9 @@ library(forecast)
 - If song is played on a smartphone or bluetooth speaker (in mono), sound can vanish
 - Correlation analysis to check mixes are "mono-compatible"
 
-## Live vs Recorded (vs Remastered)
+## Live vs Recorded vs Remastered
 
-- Dowload Goo Goo Dolls "Slide" from youtube
+- Download Goo Goo Dolls "Slide" from youtube
 - Original
 - "Remastered"
 - Live in Buffalo July 4, 2004
@@ -62,6 +64,8 @@ library(forecast)
 ## CCFs (left and right channels)
 
 ```{r}
+#| echo: false
+
 song_og <- readMP3("Slide.mp3")
 song_remastered <- readMP3("Slide-Remastered.mp3")
 song_live <- readMP3("Slide-Live.mp3")
@@ -109,18 +113,17 @@ writeWave(chorus_stereo, filename = "yeeaaah.wav")
 </audio>
 
 
-## CCFs (left and right channels)
-
 ```{r}
 #| output-location: slide
 #| fig-width: 8
 #| fig-height: 9
 #| out-width: "100%"
+#| echo: false
 
 par(mfrow = c(3, 1))
 
 ccf_og <- ccf(og_left, og_right, lag.max = 100, 
-               main = "CCF: Original (?)",
+               main = "CCF: Original",
                ylab = "CCF", col = "blue", lwd = 2)
 
 ccf_rem <- ccf(rem_left, rem_right, lag.max = 100, 
@@ -154,6 +157,8 @@ par(mfrow = c(1, 1))
 ## Note Detection using Rolling Variance
 
 ```{r}
+#| echo: false
+
 rm(list = setdiff(ls(), c("song_og","fs")))
 
 # audio clip (left channel; intro)
@@ -162,6 +167,7 @@ intro_left <- song_og@left[1:(44100 * 9)]
 
 ```{r}
 #| eval: false
+#| echo: false
 
 # Run this code to create the .mov, but then don't actually run it during the slides, just grab the animation it produced
 
@@ -199,17 +205,15 @@ animate(anim,
 ```
 
 
-## Note Detection using Rolling Variance
-
 {{< video variance_video.mp4 width="700" >}}
 
 
 ## Quick digression: music frequencies
 
 - Pure sine wave
-- $\sin(t)$: period $2\pi$, frequency $1/2\pi$
-- $\sin(2 \pi t)$: period $1$, frequency $1$
-- $\sin( 2 \pi \cdot 440 t)$: frequency 440, "440 A"
+- $y(t) = \sin(t)$: period $2\pi$, frequency $1/2\pi$
+- $y(t) =\sin(2 \pi t)$: period $1$, frequency $1$
+- $y(t) = \sin( 2 \pi \cdot 440 t)$: frequency 440, "440 A"
 
 A 440 Hz sound wave (sine)
 
@@ -223,13 +227,10 @@ A 440 Hz sound wave (sine)
 - Double the frequency
 - Same note ("pitch") but higher
 
-![](piano){width=75%}
-
-
-A 2200 Hz sound wave (sine)
+A 220 Hz sound wave (sine)
 
 <audio controls>
-  <source src="2200Hz.wav" type="audio/wav">
+  <source src="220Hz.wav" type="audio/wav">
 </audio>
 
 A 440 Hz sound wave (sine)
@@ -241,10 +242,9 @@ A 440 Hz sound wave (sine)
 
 
 ```{r}
-#| label: fig-sine-waves
-#| fig-cap: "Sine waves at 220 Hz and 440 Hz"
 #| fig-width: 8
 #| fig-height: 4.5
+#| echo: false
 
 library(ggplot2)
 
@@ -284,38 +284,69 @@ ggplot(waves, aes(x = time, y = amplitude, color = frequency)) +
   )
 ```
 
+
+![](piano){width=75%}
+
+
 ## Quick (I swear) digression: musical frequencies
 
 - Rest of the notes
 - 12 notes that repeat
-
 ![](numbered-notes){width=75%}
 
 
-$440 \cdot 2^{n/12} $
-
-
-
-
-
-## Quick side quest: music frequencies
-
-
-
+$$\mathrm{frequency \,\, n \,\, notes \,\, above \,\, or \,\, below \,\, A: \,\,\,\,}  440 \cdot 2^{n/12} $$
 
 ```{r}
+#| echo: false
+
+
 n <- seq(1,24,1)
-freqs <- round(110*2^(n/12),3)
-notes<-rep(c("Bf", "B", "C", "Df", "D", "Ef", "E", "F", "Gf", "G", "Af","A"),2)
-cbind(freqs,notes)
+
+n <- 1:24
+
+notes <- rep(
+  c("B♭", "B", "C", "D♭", "D", "E♭", 
+    "E", "F", "G♭", "G", "A♭", "A"),
+  2
+)
+
+freqs <- round(110 * 2^(n / 12), 3)
+
+df <- data.frame(
+  Note = notes,
+  Frequency = freqs
+)
+
+slide_table <- data.frame(
+  Note_1 = df$Note[1:12],
+  Hz_1   = df$Frequency[1:12],
+  Note_2 = df$Note[13:24],
+  Hz_2   = df$Frequency[13:24]
+)
+
+slide_table |>
+  gt() |>
+  cols_label(
+    Note_1 = "Note",
+    Hz_1   = "Frequency (Hz)",
+    Note_2 = "Note",
+    Hz_2   = "Frequency (Hz)"
+  ) |>
+  tab_header(
+    title = "Frequencies of Notes on a Piano"
+  ) |>
+  fmt_number(
+    columns = c(Hz_1, Hz_2),
+    decimals = 3
+  ) |>
+  tab_options(
+    table.font.size = 18,
+    heading.title.font.size = 24,
+    column_labels.font.weight = "bold",
+    data_row.padding = px(8)
+  )
 ```
-
-
-
-
-
-
-
 
 
 
@@ -341,13 +372,14 @@ pacf(note_segment, lag.max = 300,
     main = "PACF (a single note)",
     col = "blue", lwd = 2)
 
-
 ```
+
 
 
 
 ```{r}
 #| eval: false
+#| echo: false
 
 
 freq <- 175.7
@@ -402,9 +434,9 @@ writeWave(wav, "220Hz.wav")
 
 ## Pitch Detection using ACF
 - At lag 251, autocorrelation is almost 1
-- $44100/250 \approx 175.697 \approx F$
-
-## Pitch Detection using ACF
+- $\frac{251 \,\, \mathrm{cycles}}{1} \times \frac{1 \,\,\mathrm{second}}{44100 \,\,\mathrm{cycles}} = .00569 \,\, \mathrm{sec}$
+- Frequency is 44100/251
+- $44100/251 \approx 175.697 \approx F$
 
 
 ## Pitch Detection using ACF
@@ -428,7 +460,268 @@ A 175.7 Hz sound wave (sine)
 </audio>
 
 
-# ???
+## Idea: 
+
+- Use rolling variance to determine note onset
+- Find local maxima; consider neighborhood to the right of the max
+- Within that neighborhood, run ACF
+- Find local max of the ACF, $m$
+- The note has freq $44100/m$
+
+
+## Idea: Underwhelming
+
+```{r}
+#| echo: false
+
+rm(list = setdiff(ls(), c("song_og","fs")))
+
+intro_left <- song_og@left[1:(44100 * 9)]
+
+frame_size <- 1024
+n_frames <- floor(length(intro_left) / frame_size)
+frames <- matrix(intro_left[1:(n_frames * frame_size)], nrow = frame_size)
+frame_vars <- apply(frames, 2, var)
+frame_times <- (seq_along(frame_vars) * frame_size) / fs
+
+
+# Function to find local peaks in variance (Note Onsets)
+find_peaks <- function(x, threshold_quantile = 0.85, span = 10) {
+  thresh <- quantile(x, threshold_quantile, na.rm = TRUE)
+  peaks <- c()
+  for (i in (span + 1):(length(x) - span)) {
+    if (x[i] == max(x[(i - span):(i + span)], na.rm = TRUE) && x[i] > thresh) {
+      peaks <- c(peaks, i)
+    }
+  }
+  return(peaks)
+}
+
+onset_indices <- find_peaks(frame_vars, threshold_quantile = 0.82, span = 15)
+onset_times <- frame_times[onset_indices]
+
+# Find the FIRST local maximum in the ACF
+find_first_local_max <- function(vals, min_threshold = 0.25) {
+  for (i in 2:(length(vals) - 1)) {
+    # Check if it's a peak (higher than neighbors) and crosses a baseline correlation threshold
+    if (vals[i] > vals[i - 1] && vals[i] >= vals[i + 1] && vals[i] > min_threshold) {
+      return(i)
+    }
+  }
+  # Fallback to global max if no local peak meets criteria
+  return(which.max(vals))
+}
+
+
+# Loop through each detected onset, grab the post-attack window, and run ACF
+results_list <- list()
+
+for (i in seq_along(onset_times)) {
+  t_onset <- onset_times[i]
+  
+  # Take a 0.1-second window slightly to the right of the onset
+  seg_start <- round((t_onset + 0.05) * fs)
+  seg_end <- round((t_onset + 0.15) * fs)
+  
+  # Safety bounds check
+  if (seg_end > length(intro_left) || seg_start < 1) next
+  
+  note_segment <- as.numeric(intro_left[seg_start:seg_end])
+  
+  # Use stats::acf explicitly to avoid any function/variable name collisions
+  acf_res <- stats::acf(note_segment, lag.max = 800, plot = FALSE)
+  lags_vec <- as.vector(acf_res$lag)
+  acf_vec <- as.vector(acf_res$acf)
+  
+  # Restrict search to valid guitar lag range (~60 Hz to ~1000 Hz)
+  search_idx <- which(lags_vec >= 40 & lags_vec <= 750)
+  if (length(search_idx) == 0) next
+  
+  sub_lags <- lags_vec[search_idx]
+  sub_acf <- acf_vec[search_idx]
+  
+  # Find the lag with the highest autocorrelation
+  best_lag <- sub_lags[which.max(sub_acf)] # not quite; want first local max
+  estimated_freq <- fs / best_lag
+  
+  results_list[[i]] <- data.frame(
+    Note_Index = i,
+    Onset_Time = round(t_onset, 2),
+    Best_Lag = best_lag,
+    Frequency_Hz = round(estimated_freq, 2)
+  )
+}
+
+# Combine into a clean summary table
+detected_notes_df <- bind_rows(results_list)
+print(detected_notes_df)
+```
+
+
+Did pick out a lot of the A flats and E flats (though in the wrong octave), but, on further reflection, rolling variance isn't catching the high note.
+
+
+{{< video variance_video.mp4 width="700" >}}
+
+
+
+## PACF
+
+```{r}
+# Starting note, but already "ringing"
+note_start_sec <- .85
+note_end_sec <- .9
+
+note_segment <- intro_left[(note_start_sec * 44100):(note_end_sec * 44100)]
+writeWave(Wave(left = note_segment, samp.rate = 44100, bit = 16), "first_note.wav")
+
+# PACF
+pacf(note_segment, lag.max = 100, 
+    main = "PACF (a single note, already playing)",
+    col = "blue", lwd = 2)
+
+```
+
+## Synthesize sound via AR coefficients
+
+Method 1
+
+```{r}
+
+# don't use mle - high freq problems
+ar_model <- ar(note_segment, method = "burg")
+
+print(paste("Optimal AR Order chosen by AIC:", ar_model$order))
+print(ar_model)
+
+
+phi <- ar_model$ar
+sigma2 <- ar_model$var.pred
+set.seed(42)
+sustained_sim <- simulate(ar_model, nsim = round(3 * 44100)) #lasts 3 sec
+
+# scale safely to 16-bit audio range; HAD TO CRANK THIS WAY DOWN
+sustained_scaled <- as.integer(scale(as.numeric(sustained_sim)) * 4000)
+
+writeWave(Wave(left = sustained_scaled, samp.rate = fs, bit = 16), "synth2.wav")
+
+# Plot the spectral density implied by your AR(33) model
+spectrum(note_segment, method = "ar", 
+         main = "AR(33) Spectral Density (Guitar Timbre Fingerprint)",
+         xlab = "Frequency (Normalized)", ylab = "Power Spectral Density")
+
+```
+
+
+COMPLETE FAILURE!!!
+
+
+<audio controls>
+  <source src="synth2.wav" type="audio/wav">
+</audio>
+
+
+
+
+
+```{r}
+
+a <- ar_model$ar
+
+# Use the last 33 samples of the real guitar as the initial state
+history <- as.numeric(tail(note_segment, 33))
+
+n_synth <- 3 * 44100
+
+synth <- numeric(n_synth)
+
+# Put the initial 33 samples into the beginning
+synth[1:33] <- history
+
+# Now let the AR model ring with ZERO new excitation
+for (n in 34:n_synth) {
+    synth[n] <- sum(a * synth[(n-1):(n-33)])
+}
+
+# Normalize without changing the waveform shape
+synth <- synth / max(abs(synth))
+
+# Leave some headroom
+synth <- synth * 0.9 * 32767
+
+synth_int <- as.integer(synth)
+
+writeWave(
+    Wave(left = synth_int, samp.rate = 44100, bit = 16),
+    "synth3.wav"
+)
+
+
+
+```
+
+
+
+
+
+# More complex sounds
+
+## Pure sine waves vs instruments
+
+Basic pitch plus overtones:
+
+(synthetic example)
+
+\begin{align}
+y(t) = & 1 \sin( 2 \pi \cdot 220 t) + \\
+      &  .1 \sin ( 2 \pi \cdot 330 t) +\\
+      &  .8 \sin ( 2 \pi \cdot 660 t) +\\
+      & .4 \sin (2 \pi \cdot 880 t)
+\end{align}
+
+Different overtones can have different phases or decay rates:
+
+\begin{align}
+y(t) = & 1 \sin[ 2 \pi \cdot 220 t] + \\
+      &  .1 \sin[ 2 \pi \cdot 330 (t+.0003)] * 1.3^{-t} +\\
+      &  .8 \sin[ 2 \pi \cdot 660 t]  * 1.1^{-t} +\\
+      & .4 \sin[ \pi \cdot 880 (t-.0001)] * 2^{-t}
+\end{align}
+
+
+```{r}
+# synthetic sounds
+duration <- 5
+sample_rate <- 44100
+
+t <- seq(0, duration, 1 / sample_rate)
+
+wave1 <-  1 * sin(2 * pi * 220 * t) +
+         .1 * sin(2 * pi * 330 * (t+.0003)) * 1.3^(-t) +
+         .8 * sin(2 * pi * 660 * t) * 1.1^(-t) +
+         .4 * sin(2 * pi * 880 * (t-.0001)) * 2^(-t)
+
+wav <- Wave(
+  left = as.integer(wave1 * 15000), #just in case waves "aligned", dont want to use 32767 
+  samp.rate = sample_rate,
+  bit = 16
+)
+
+writeWave(wav, "synth1.wav")
+
+```
+
+
+Synthetic sound
+
+<audio controls>
+  <source src="synth1.wav" type="audio/wav">
+</audio>
+
+
+
+
+# Other Directions
 
 ## Other time series
 
