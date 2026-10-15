@@ -1,0 +1,691 @@
+---
+title: "Time Series Midterm Presentation"
+author: "Austin Reszel"
+format: revealjs
+scrollable: true
+editor: visual
+---
+
+# Section 1: Topic/Background
+
+## Motivating Issue
+
+- Large scale climate change predictions/models are based upon large geographic areas or are considered a reflection of changes on a worldwide scale.
+
+- How can we utilize this large scale climate change data to predict the effect of climate change in Buffalo, NY?
+
+- Our goal is to observe long-term predicted weather/climate patterns in Buffalo using available global information.
+
+## The Data
+
+- Data regarding Buffalo, NY weather comes from the National Centers for Environmental Information within the National Oceanic and Atmospheric Administration (NOAA). This data is collected monthly from sensors at the Buffalo airport, and data exists from May 1938 to today. Available information includes average daily (maximum/minimum) temperature, total snowfall, total precipitation, and other measures. We choose to use average daily minimum temperature.
+
+- While average temperatures are extremely seasonal, some potential covariates that may be predictors of short-term behavior are distinct from those that model long-term temperature increases caused by global warming. Factors such as El Nino and Arctic Oscillation may help explain differences year to year, but are essentially useless for long-term predicting. However, variables related to long-term changes in the climate may not be fully appropriate for the models we have learned.
+
+- Regardless, we choose to use deseasonalized CO2 levels in the atmosphere as a predictor to see how the common time series models behave. Other considered covariates were average low surface temperature in the United States and a certain region in the Great Lakes area, but were not included in models due to poor associations during exploratory analyses. These CO2 levels are measured in parts per million (PPM) and also come from NOAA. These began to be recorded only in March 1958. Long term projections (up to 2500) are provided under different climate scenarios from a report titled "IPCC Working Group 1 (WG1) Sixth Assessment Report (AR6) Annex III Extended Data" by Smith et al. (2021).
+
+## Overall Goal
+
+- Our goal is to use the above information to predict the long-term path of average daily minimum temperatures at the Buffalo airport under these different trajectories. We will compare the trajectories of the predictions produced by a reg(S)ARIMA model under different scenarios with a smoothed trajectory using only the real data produced by the Holt-Winters model.
+
+# Exploratory Analysis
+
+## Looking at the outcome
+
+```{r}
+#| echo: false
+
+library(ggplot2)
+library(forecast)
+library(fpp3)
+library(tidyverse)
+library(tsbox)
+library(lubridate)
+library(reprex)
+library(zoo)
+library(tseries)
+library(forecast)
+library(seasonal)
+library(astsa)
+library(readxl)
+library(lmtest)
+library(urca)
+library(TSA)
+
+buffalo_weather <- read.csv("C:/Users/17163/Documents/UB/PhD courses/PhD_Fall_2026/Time Series/midterm project/buffalo_airport.csv", header=TRUE)
+buffalo_weather$date <- as.Date(paste0(buffalo_weather$DATE, "-01"),
+                                format = "%Y-%m-%d")
+co2_levels <- read.table("C:/Users/17163/Documents/UB/PhD courses/PhD_Fall_2026/Time Series/midterm project/co2_mm_mlo.csv", header=TRUE, sep=',')
+
+co2_levels <- co2_levels %>%
+  mutate(date = as.Date(ym(paste(year, month, sep = "-"))))
+
+buffalo_weather_window_co2 <- buffalo_weather[buffalo_weather$date >= '1958-03-01' &
+                                                buffalo_weather$date <= '2026-08-01',]
+
+weather_co2 <- data.frame(date= buffalo_weather_window_co2$date,
+                          avg_low_temp = (buffalo_weather_window_co2$TMIN * 9/5) + 32,
+                          co2_avg = co2_levels$average,
+                          co2_ds = co2_levels$deseasonalized)
+
+avg_co2_ts <- ts(weather_co2$co2_avg, start = c(1958,3), frequency=12)
+ds_co2_ts <- ts(weather_co2$co2_ds, start=c(1958,3), frequency=12)
+avg_low_temp_co2_ts <- ts(weather_co2$avg_low_temp, start=c(1958,3), frequency = 12)
+```
+
+```{r}
+#| echo: true
+autoplot(avg_low_temp_co2_ts)+
+  labs(title = "Buffalo: Average daily low temp by month", x = "Date", y = "Average low temperature (F)") +
+  theme_minimal()
+
+```
+
+## Potential Trend
+
+```{r}
+#| echo: true
+trend_avg_low = ts_trend(avg_low_temp_co2_ts)
+ts_plot(ts_c(trend_avg_low, avg_low_temp_co2_ts))
+trend_avg_low[1]
+trend_avg_low[780]
+
+adf.test(avg_low_temp_co2_ts)
+```
+
+There appears to be some very slight trend, but the ADF test provides evidence this is a stationary sequence.
+
+## Looking at the data
+
+```{r}
+#| echo: true
+autoplot(ds_co2_ts) + 
+  labs(title = "Average CO2 level (deseasonalized)", x = "Date", y = "Average CO2 level (ppm)") +
+  theme_minimal()
+
+```
+
+CO2 concentration continually increases over time.
+
+## Seasonality
+
+```{r}
+#| echo: true
+as_tsibble(avg_low_temp_co2_ts) |> gg_season()
+```
+
+## Lag Plot
+
+```{r}
+#| echo: true
+lag1.plot(avg_low_temp_co2_ts,12)
+```
+
+## Connection between CO2 and Temp?
+
+```{r}
+#| echo: true
+weather_co2 |>
+  ggplot(aes(x = avg_low_temp, y = co2_ds)) +
+  labs(y = "Deseasonalized CO2 level",
+       x = "Buffalo average daily low temperature") +
+  geom_point() 
+
+ccf(avg_low_temp_co2_ts, ds_co2_ts, 12)
+lag2.plot(avg_low_temp_co2_ts,ds_co2_ts , 12) 
+```
+
+## Is seasonality hiding the connection?
+
+Perhaps part of the reason we see no correlation between the two variables is that temperature is extremely seasonal, while CO2 concentration tends to just increase over time. We attempt to use regression to account for the seasonality and then consider the connection between CO2 and the residuals from this model.
+
+```{r}
+#| echo: true
+fourier_rm_seas_co2 <- fourier(avg_low_temp_co2_ts, K = 3)
+fit_seasonal_co2 <- lm(avg_low_temp_co2_ts ~ fourier_rm_seas_co2)
+
+weather_co2$buf_seas_dev <- resid(fit_seasonal_co2)
+
+ccf(weather_co2$buf_seas_dev, weather_co2$co2_ds, lag.max = 24)
+ccf(weather_co2$buf_seas_dev, diff(weather_co2$co2_ds), lag.max = 24)
+
+weather_co2$co2_ds_lag3 <- c(NA, lag(diff(weather_co2$co2_ds), 3))
+model_data <- weather_co2[!is.na(weather_co2$co2_ds_lag3),]
+
+```
+
+# Modeling Part 1: reg(S)ARIMA
+
+## Model Formulation
+
+We can consider the classic regression model with uncorrelated errors:
+
+$$ y_t = \sum_{j=1}^r \beta_j z_{j} + x_t 
+ $$ where $$ x_t $$ is a process with a covariance function $$ \gamma_x(s,t) $$, which is considered to be 0 in OLS. Here, we can fit a model with $$x_t $$ following the standard ARIMA framework: $$ x_t = \phi_1 X_{t-1} + \cdots + \phi_p X_{t-p} + \epsilon_t + \theta_1 \epsilon_{t-1} + \cdots + \theta_q \epsilon_{t-q} $$
+
+If we want to fit a regSARIMA type model then we can use the framework:
+
+$$
+ \phi(B)\Phi(B^m)(1-B)^d(1-B^m)^D x_t = \theta(B)\Theta(B^m)\epsilon_t
+$$
+
+## Choosing initial model: regSARIMA(0,1,1)(0,1,1)
+
+```{r}
+#| echo: true
+buffalo_ts <- ts(model_data$avg_low_temp, start=c(1958,7), frequency=12)
+
+fourier_matrix_k2 <- fourier(buffalo_ts, K = 2)
+x_co2 <- matrix(model_data$co2_ds_lag3 ,ncol=1, dimnames = list(NULL, "co2_ds_lag3"))
+x_covs <- cbind(x_co2, fourier_matrix_k2)
+
+lm1 <- lm(avg_low_temp ~ co2_ds_lag3, data=model_data)
+lm2 <- lm(avg_low_temp ~ co2_ds_lag3 + fourier_matrix_k2, data=model_data)
+
+tsdisplay(residuals(lm1), lag.max = 30)
+tsdisplay(diff(residuals(lm1)), lag.max = 30)
+tsdisplay(diff(residuals(lm1), 12))
+tsdisplay(diff(diff(residuals(lm1), 12)))
+
+arima1 <- arima(buffalo_ts, order= c(0,1,1), seasonal = c(0,1,1), xreg=x_co2)
+coeftest(arima1)
+checkresiduals(arima1)
+```
+
+## Choosing initial model: regARIMA(0,1,1)
+
+```{r}
+#| echo: true
+tsdisplay(residuals(lm2), lag.max=30)
+tsdisplay(diff(residuals(lm2)), lag.max=30)
+arima2 <- arima(buffalo_ts, order = c(0,1,1), xreg=x_covs)
+coeftest(arima2)
+checkresiduals(arima2)
+```
+
+## What about auto.arima?
+
+```{r}
+#| echo: true
+autoarima1 <- auto.arima(buffalo_ts, xreg=x_co2)
+autoarima2 <- auto.arima(buffalo_ts, xreg= x_covs)
+summary(autoarima1)
+coeftest(autoarima1)
+summary(autoarima2)
+coeftest(autoarima2)
+checkresiduals(autoarima1)
+checkresiduals(autoarima2)
+autoarima1$aicc
+autoarima2$aicc
+```
+
+## What if we try just regular CO2 level?
+
+```{r}
+#| echo: true
+autoarima4 <- auto.arima(avg_low_temp_co2_ts,xreg=ds_co2_ts)
+summary(autoarima4)
+checkresiduals(autoarima4)
+coeftest(autoarima4)
+
+x_co <- matrix(weather_co2$co2_ds ,ncol=1, dimnames = list(NULL, "co2_ds"))
+x_covs_aa5 <- cbind(fourier_rm_seas_co2,x_co)
+autoarima5 <- auto.arima(avg_low_temp_co2_ts,xreg=x_covs_aa5,
+                         seasonal=FALSE)
+summary(autoarima5)
+checkresiduals(autoarima5)
+coeftest(autoarima5)
+
+autoarima4$aicc
+autoarima5$aicc
+```
+
+## Potential Improvement to autoarima5?
+
+- Could a different parameter for the Fourier terms improve the model fit? Let's do a grid search and compare the AICC.
+
+```{r}
+#| echo: true
+results <- data.frame()
+for (K in 1:6) {
+  fourier_terms <- fourier(
+    avg_low_temp_co2_ts,
+    K = K
+  )
+  fit <- auto.arima(
+    avg_low_temp_co2_ts,
+    xreg = cbind(fourier_terms, ds_co2_ts),
+    seasonal = FALSE
+  )
+  results <- rbind(
+    results,
+    data.frame(
+      K = K,
+      p = fit$arma[1],
+      d = fit$arma[6],
+      q = fit$arma[2],
+      AICc = fit$aicc,
+      AIC = AIC(fit),
+      BIC = BIC(fit),
+      logLik = as.numeric(logLik(fit)),
+      sigma2 = fit$sigma2
+    )
+  )
+}
+results <- results[order(results$AICc), ]
+results
+```
+
+This is the model we already selected from before. Due to the significance of our predictor and a simpler model, this leads me to potentially favor this for predictive utility over the fourier-based model that used the lag 3 differences CO2 levels as a covariate. However, we cannot directly compare the AICC since a few observations were left out when fitting that model. We will perform some cross validation to see which we should choose.
+
+# Cross Validation of Models
+
+## CV Setup
+
+- We will compare the two models that passed the Ljung-Box test, both of which included Fourier terms as regressors. We will also fit a plain auto.arima model without using CO2 as a comparison. We will include Fourier terms in this model since that appeared to better account for the seasonality.
+
+- We will use 12-step ahead cross validation. Our goal is long-term forecasting of the trajectory of temperature, so choosing a small value here might not be reflective of the model's ability to accomplish this.
+
+## CV Code and Results
+
+```{r}
+#| echo: true
+
+x1 <- ts(model_data$avg_low_temp, start = c(1950, 7),frequency = 12)
+fourier1 <- fourier(x1, K = 2)
+fourier2 <- fourier(x1, K = 3)
+x_co2_lag3 <- matrix(
+  model_data$co2_ds_lag3,
+  ncol = 1,
+  dimnames = list(NULL, "co2_ds_lag3")
+)
+
+x_covs_opt1 <- cbind(x_co2_lag3,fourier1)
+
+x_co2 <- matrix(
+  model_data$co2_ds,
+  ncol = 1,
+  dimnames = list(NULL, "co2_ds")
+)
+
+x_covs_opt2 <- cbind(x_co2,fourier2)
+# Option 1: ARIMA(0,1,5) + CO2 lag 3 + Fourier K=2
+far_opt1 <- function(y, h) {
+  n <- length(y)
+  fit <- Arima(
+    y,
+    order = c(0, 1, 5),
+    xreg = x_covs_opt1[1:n, , drop = FALSE]
+  )
+  forecast(
+    fit,
+    h = h,
+    xreg = x_covs_opt1[
+      (n + 1):(n + h),
+      ,
+      drop = FALSE
+    ]
+  )
+}
+
+# Option 2: ARIMA(1,0,1) + CO2 + Fourier K=3
+far_opt2 <- function(y, h) {
+  n <- length(y)
+  fit <- Arima(
+    y,
+    order = c(1, 0, 1),
+    xreg = x_covs_opt2[1:n, , drop = FALSE]
+  )
+  forecast(
+    fit,
+    h = h,
+    xreg = x_covs_opt2[
+      (n + 1):(n + h),
+      ,
+      drop = FALSE
+    ]
+  )
+}
+
+# Option 3: ARIMA(1,1,2)
+far_opt3 <- function(y, h) {
+  forecast(
+    Arima(
+      y,
+      order = c(1, 1, 2)
+    ),
+    h = h
+  )
+}
+
+e1 <- tsCV(x1,far_opt1,h = 12)
+e2 <- tsCV(x1,far_opt2,h = 12)
+e3 <- tsCV(x1,far_opt3,h = 12)
+
+tibble(
+  model = c(
+    "ARIMA(0,1,5) + CO2 lag 3 + Fourier K=2",
+    "ARIMA(1,0,1) + CO2 + Fourier K=3",
+    "ARIMA(1,1,2)"
+  ),
+  rmse = c(
+    sqrt(mean(e1^2, na.rm = TRUE)),
+    sqrt(mean(e2^2, na.rm = TRUE)),
+    sqrt(mean(e3^2, na.rm = TRUE))
+  )
+)
+```
+
+- Option 1 and 2 produce nearly indistinguishable results. If required to choose 1 model, option 2 would be preferred due to its simplicity. We will model our long term predictions using both models to show how drastically the specific formulation of covariate impacts the trajectories.
+
+## Something extra: Diebold-Mariano test for predictive accuracy
+
+- The Deibold -Mariano test considers the forecast residuals of two models $$e_i = y_i - f_i $$ and $$ r_i=y_i-g_i $$ and then takes the difference in some way such as $$d_i = e_i^2 -r_i^2$$ , which creates a time series called the loss-differential. We can then consider $$ \bar{d} $$, the mean of those differences, and $$\gamma_k$$, the autocovariance function at lag k. This produces an overall test statistic of $$ DM = \frac{\bar{d}}{\sqrt{[\gamma_0 + 2 \sum^{h-1}_{k=1}\gamma_k]/n}} $$, which is asymptotically distributed as a N(0,1) random variable
+
+## D-M Test for 12 month prediction - code and results
+
+```{r}
+#| echo: true
+e1_12 <- e1[, 12]
+e2_12 <- e2[, 12]
+e3_12 <- e3[, 12]
+
+ok <- complete.cases(e1_12, e2_12, e3_12)
+
+dm.test(e1_12[ok], e3_12[ok], h = 12, power = 2)
+dm.test(e2_12[ok], e3_12[ok], h = 12, power = 2) 
+dm.test(e1_12[ok], e2_12[ok], h = 12, power = 2)
+```
+
+# Forecasting
+
+## Different Scenarios + Source
+
+- The covariate data used spans all the way up to 2500. These are model based predictions of CO2 levels under a variety of climate scenarios. The SSP (Shared Socio-economic pathways) framework is designed to examine societal impacts (economic, immigration, etc.) of different trajectories of greenhouse gas emissions. There are many data sets available based on this model to project various outcomes for future decades (or even centuries). Here are the trajectories we attempt to model (info from Australia National Environmental Science Program):
+
+  - SSP119: Immediate emissions reduction - large scale renewable energy usage and carbon reduction technology (Estimated 1.0-1.8 C increase by 2100)
+
+  - SSP245: Viewed as similar to the present - blend of fossil fuel usage and renewables (Estimated 1.3-2.4 C increase by 2100)
+
+  - SSP370: Continued use of fossil fuels and no increase in renewable energy usage (Estimated 2.8-4.6 C increase by 2100)
+
+  - SSP585: Drastically increased fossil fuel usage (Estimated 3.3-5.7 C increase by 2100)
+
+## Converting the data
+
+- Before using, the data requires significant wrangling, and we must convert the units used. The units used in this data set are radiative forcing, which is often defined as $$  \Delta f  =  c_0 * e^{c / 5.35}$\$ , and $$c_0\$\$ is defined as the pre-industrial level of CO2 in the atmosphere, which we will use as 278. The source does not provide a direct definition used, so this may lead to minor discrepancies in the covariates used. This could be a source of error in our results, but we are more interested in the model's ability to predict general trajectory under the different scenarios.
+
+```{r}
+#| echo: true
+ssp119 <- read.table("C:/Users/17163/Documents/UB/PhD courses/PhD_Fall_2026/Time Series/midterm project/ssp119.csv", header=TRUE,sep=',')
+ssp245 <- read.table("C:/Users/17163/Documents/UB/PhD courses/PhD_Fall_2026/Time Series/midterm project/ssp245.csv", header=TRUE,sep=',')
+ssp370 <- read.table("C:/Users/17163/Documents/UB/PhD courses/PhD_Fall_2026/Time Series/midterm project/ssp370.csv", header=TRUE,sep=',')
+ssp585 <- read.table("C:/Users/17163/Documents/UB/PhD courses/PhD_Fall_2026/Time Series/midterm project/ssp585.csv", header=TRUE,sep=',')
+
+make_monthly_co2 <- function(data,
+                             year_col = "year",
+                             co2_col = "co2",
+                             c0 = 278,
+                             start_date = "2026-09-01",
+                             end_date = "2099-12-01") {
+  
+  yr  <- data[[year_col]]
+  co2 <- data[[co2_col]]
+  co2 <- c0 * exp(co2 / 5.35)
+  yrs <- min(yr):max(yr)
+  monthly <- tibble(
+    year  = rep(yrs, each = 12),
+    month = rep(1:12, times = length(yrs))
+  ) %>%
+    mutate(
+      t    = year + (month - 1) / 12,
+      date = as.Date(sprintf("%d-%02d-01", year, month))
+    )
+  monthly$co2_ds <- approx(x = yr, y = co2, xout = monthly$t, rule = 1)$y
+  monthly$co2_ds_lag3   <- c(NA, lag(diff(monthly$co2_ds), 3))
+  monthly %>%
+    filter(date >= as.Date(start_date), date <= as.Date(end_date))
+}
+ssp119_monthly <- make_monthly_co2(ssp119)
+ssp245_monthly <- make_monthly_co2(ssp245)
+ssp370_monthly <- make_monthly_co2(ssp370)
+ssp585_monthly <- make_monthly_co2(ssp585)
+```
+
+## Forecasting for the CO2 lag model
+
+```{r}
+#| echo: true
+forecast_scenario <- function(fit, x, scen_df, K = 2, xcol = "co2_ds_lag3", level = 95) {
+  h <- nrow(scen_df)
+  
+  if (!xcol %in% names(scen_df))
+    stop("Column '", xcol, "' not found. Available: ", paste(names(scen_df), collapse = ", "))
+  
+  # Same order as training: CO2 first, then Fourier terms
+  xreg_future <- cbind(co2_ds = as.numeric(scen_df[[xcol]]),
+                       fourier(x, K = K, h = h))
+  
+  stopifnot(ncol(xreg_future) == ncol(fit$xreg))
+  colnames(xreg_future) <- colnames(fit$xreg)
+  
+  fc <- forecast(fit, h = h, xreg = xreg_future, level = level)
+  
+  tibble(
+    date  = seq(as.Date("2026-09-01"), by = "month", length.out = h),
+    mean  = as.numeric(fc$mean),
+    lower = as.numeric(fc$lower[, 1]),
+    upper = as.numeric(fc$upper[, 1])
+  )
+}
+
+scenarios <- list(ssp119 = ssp119_monthly, ssp245 = ssp245_monthly,
+                  ssp370 = ssp370_monthly, ssp585 = ssp585_monthly)
+
+fc_all <- bind_rows(
+  lapply(scenarios, function(s) forecast_scenario(autoarima2, buffalo_ts, s, K = 2)),
+  .id = "scenario"
+)
+
+obs <- tibble(
+  date  = as.Date(as.yearmon(time(buffalo_ts))),
+  value = as.numeric(buffalo_ts)
+  
+)
+```
+
+## Forecasting for the CO2 lag model
+
+```{r}
+ggplot() +
+  geom_line(data = obs, aes(date, value), color = "black") +
+  geom_ribbon(data = fc_all,
+              aes(date, ymin = lower, ymax = upper, fill = scenario), alpha = 0.15) +
+  geom_line(data = fc_all, aes(date, mean, color = scenario), linewidth = 0.8) +
+  labs(x = NULL, y = "Response", color = "Scenario", fill = "Scenario",
+       title = "regSARIMA forecasts to 2100 under four SSP scenarios") +
+  theme_minimal()
+```
+
+- From this plot, it doesn't seem like using the lag 3 differenced CO2 levels as a covariate actually leads to much difference between the 4 potential trajectories. There is significant overlap. This model, well maybe a good fit for our true recorded data, does not serve us well for forecasting.
+
+## Forecasting for the raw CO2 model
+
+```{r}
+#| echo: true
+
+forecast_scenario2 <- function(fit, x, scen_df, K, xcol = "co2_ds", level = 95) {
+h <- nrow(scen_df)
+
+four <- fourier(x, K = K, h = h)
+co2_name <- setdiff(colnames(fit$xreg), colnames(four))
+
+xreg_future <- cbind(as.numeric(scen_df[[xcol]]), four)
+colnames(xreg_future) <- c(co2_name, colnames(four))
+xreg_future <- xreg_future[, colnames(fit$xreg)]
+
+fc <- forecast(fit, h = h, xreg = xreg_future, level = level)
+
+tibble(
+  date  = as.Date(as.yearmon(time(fc$mean))),
+  mean  = as.numeric(fc$mean),
+  lower = as.numeric(fc$lower[, 1]),
+  upper = as.numeric(fc$upper[, 1])
+)
+}
+  
+  fc_all2 <- bind_rows(
+    lapply(scenarios, function(s) forecast_scenario2(autoarima5, avg_low_temp_co2_ts, s, K = 3)),
+    .id = "scenario"
+  )
+  
+  obs2 <- tibble(
+    date  = as.Date(as.yearmon(time(avg_low_temp_co2_ts))),
+    value = as.numeric(avg_low_temp_co2_ts)
+  )
+  
+```
+
+## Forecasting for the raw CO2 model
+
+```{r}
+ggplot() +
+  geom_line(data = obs2, aes(date, value), color = "black") +
+  geom_ribbon(data = fc_all2,
+              aes(date, ymin = lower, ymax = upper, fill = scenario), alpha = 0.15) +
+  geom_line(data = fc_all2, aes(date, mean, color = scenario), linewidth = 0.8) +
+  labs(x = NULL, y = "Response", color = "Scenario", fill = "Scenario",
+       title = "regSARIMA forecasts to 2100 under four SSP scenarios") +
+  theme_minimal()
+```
+
+# Holt-Winters Smoothing Models
+
+## Methodology
+
+These are the classic exponential smoothing models that can also account for seasonality. They are made up of a forecast equation and 3 smoothing equations corresponding to level $$ l_t $$, trend $$b_t $$, and seasonal components $$ s_t $$ with smoothing parameters $$ \alpha, \beta^*, \gamma $$ . The additive model assumes the seasonal variation is constant over time, while the multiplicative model assumes this variation changes in proportion to the series.
+
+## Trajectory without including CO2
+
+- How will the trajectory change if we do not include CO2 as a covariate at all and simply model the trajectory of average low temperature in Buffalo using the observed data we have collected?
+
+```{r}
+avg_low_temp_co2_tbl<- as_tsibble(avg_low_temp_co2_ts)
+es_fit <- avg_low_temp_co2_tbl |>
+  model(
+    additive = ETS(value ~ error("A") + trend("A") +
+                     season("A")),
+    multiplicative = ETS(value ~ error("M") + trend("A") +
+                           season("M"))
+  )
+
+es_fc <- es_fit |> forecast(h=880)
+
+es_fc_add <- es_fc |>
+  filter(.model == "additive")
+
+es_fc_add |>
+  autoplot(avg_low_temp_co2_tbl) +
+  labs(
+    title = "Additive Holt-Winters Forecast",
+    y = "Temperature (F)"
+  )
+
+es_fc_mult <- es_fc |>
+  filter(.model == "multiplicative")
+
+es_fc_mult |>
+  autoplot(avg_low_temp_co2_tbl) +
+  labs(
+    title = "Multiplicative Holt-Winters Forecast",
+    y = "Temperature (F)"
+  )
+
+es_fc_add_preds <- ts(es_fc_add$.mean, start=c(2026,9), frequency=12) 
+es_fc_add_trend <- trend(es_fc_add_preds)
+
+es_fc_mult_preds <- ts(es_fc_mult$.mean, start=c(2026,9), frequency=12) 
+es_fc_mult_trend <- trend(es_fc_mult_preds)
+```
+
+- The additive model appears to slightly increase. The confidence bounds become so large for distant forecasts that they are essentially meaningless.
+
+- The multiplicative model shows a decrease in trajectory over time, which seems very unrealistic without making seemingly impossible assumptions about global emissions, such as those made under ssp119. This suggests this model may not be appropriate for this series.
+
+# Comparison of Results
+
+## Long term averages
+
+- Looking at the final year of our forecasts, what are the average temperatures predicted by that model for each year?
+
+  ```{r}
+  arima_ann <- fc_all2 |>
+    group_by(scenario, year = year(date)) |>
+    summarise(mean = mean(mean), lower = mean(lower), upper = mean(upper),
+              n = n(), .groups = "drop") |>
+    filter(n == 12) |>
+    select(scenario, year, mean, lower, upper)
+
+  hw_ann <- es_fc_add |>
+    as_tibble() |>
+    mutate(ci = hilo(value, 95),
+           lower = ci$lower,
+           upper = ci$upper,
+           year  = year(index)) |>
+    group_by(year) |>
+    summarise(mean = mean(.mean), lower = mean(lower), upper = mean(upper),
+              n = n(), .groups = "drop") |>
+    filter(n == 12) |>
+    mutate(scenario = "Holt-Winters (additive)") |>
+    select(scenario, year, mean, lower, upper)
+
+  all_ann <- bind_rows(arima_ann, hw_ann)
+
+  all_ann |>
+    group_by(scenario) |>
+    filter(year == max(year)) |>
+    ungroup() |>
+    mutate(across(c(mean, lower, upper), ~ round(.x, 1)))
+  ```
+
+- How does this compare to the levels at 2025?
+
+```{r}
+year_data <- weather_co2[year(weather_co2$date) == 2025, "avg_low_temp"]
+
+cat(
+  "Year:", 2025,
+  "Average:", mean(year_data, na.rm = TRUE),
+  "Min:", min(year_data, na.rm = TRUE),
+  "Max:", max(year_data, na.rm = TRUE),
+  "\n"
+)
+```
+
+## Conclusions/Takeaways
+
+- Using our chosen regARIMA model with raw CO2 as the predictor, we see drastically different trajectories under each pathway. Given increasing CO2 levels, this model projects increases in temperature over time. Using lagged and differenced CO2 levels produces meaningless trajectory projections, and they are largely overlapping.
+
+- The additive Winter-Holt model shows a leveling out of average minimum temperatures.
+
+- In both cases, the confidence intervals are extremely large for far forecasts, and are not useful at all.
+
+## Conclusions/Takeaways
+
+- These models are not well suited for unique long-term climate change projections. They are extremely dependent on the modeled CO2 values that were used as predictors for future average minimum temperature models. Without using this information, the projections are essentially useless. In addition, in the extreme climate scenarios, increases of 20-30 F far exceed the values provided by researchers regarding the different pathways. This may suggest the relationship between CO2 and average daily minimum temperature is not properly modeled.
+
+- To fit a proper model to measure climate change, there are endless potential covariates that play a role, as well as general climate mechanisms that simple time series models cannot well account for. Something much more complex is needed.
+
+- This model is likely poor suited to account for any short-term temperature changes that are not well-explained by the seasonal components included in the models.
+
+## Links to sources used
+
+<https://nesp2climate.com.au/wp-content/uploads/2024/01/Understanding-SSPs-1.pdf>
+
+<https://gml.noaa.gov/ccgg/trends/data.html>
+
+<https://climateknowledgeportal.worldbank.org/download-data>
+
+<https://real-statistics.com/time-series-analysis/forecasting-accuracy/diebold-mariano-test/>
+
+<https://zenodo.org/records/5705391>
