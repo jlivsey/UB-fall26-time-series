@@ -1,0 +1,1182 @@
+---
+title: "2026 Time Series"
+author: "09 - VAR"
+format: revealjs
+editor: source
+toc: true
+toc-depth: 1
+slide-number: true
+smaller: false
+scrollable: true 
+execute:
+  echo: true
+editor_options: 
+  chunk_output_type: console
+---
+
+% Theorem like  environments
+\newtheorem{Proposition}{Proposition}
+\newtheorem{Result}{Result}
+\newtheorem{Illustration}{Illustration}
+% \newtheorem{Theorem}{Theorem}
+% \newtheorem{Lemma}{Lemma}
+% \newtheorem{Corollary}{Corollary}
+% \newtheorem{Definition}{Definition}
+% \newtheorem{Remark}{Remark}
+
+
+% Short form of environments
+\newcommand{\be}{\begin{equation}}
+\newcommand{\ee}{\end{equation}}
+\newcommand{\beqa}{\begin{eqnarray*}}
+\newcommand{\eeqa}{\end{eqnarray*}}
+\newcommand{\beqn}{\begin{eqnarray}}
+\newcommand{\eeqn}{\end{eqnarray}}
+\newcommand{\baa}{\begin{array}}
+\newcommand{\eaa}{\end{array}}
+\newcommand{\bcc}{\begin{center}}
+\newcommand{\ecc}{\end{center}}
+\newcommand{\btab}{\begin{tabular}}
+\newcommand{\etab}{\end{tabular}}
+
+% Short forms of frequently used commands
+\newcommand{\mb}{\makebox}
+\newcommand{\lt}{\left}
+\newcommand{\rt}{\right}
+\newcommand{\lb}{\label}
+\newcommand{\noi}{\noindent}
+\newcommand{\nn}{\nonumber}
+\newcommand{\ld}{\ldots}
+\newcommand{\cd}{\cdot}
+\newcommand{\st}{\stackrel}
+\newcommand{\ds}{\displaystyle}
+\newcommand{\ov}{\overline}
+\newcommand{\un}{\underline}
+\newcommand{\ua}{\uparrow}
+\newcommand{\da}{\downarrow}
+\newcommand{\vn}{\varnothing}
+\newcommand{\fa}{\forall}
+\newcommand{\sm}{\setminus}
+\newcommand{\rn}{\sqrt{n}}
+\newcommand{\iy}{\infty}
+\newcommand{\f}[2]{\frac{#1}{#2}}
+\newcommand{\sifield}[1]{\si\langle{#1}\rangle}
+\newcommand{\lsb}{\bigl\{}
+\newcommand{\rsb}{\bigr\}}
+\setlength{\fboxrule}{.1pt}
+\setlength{\fboxsep}{.5pt}
+\newcommand{\prm}{^{\prime}}
+\newcommand{\cond}{\,|\,}
+\newcommand{\prodt}{\prod_{t=1}^T}
+\DeclareMathOperator*{\argminA}{arg\,min}
+\DeclareMathOperator*{\argmaxA}{arg\,max}
+
+
+
+
+
+
+
+
+%Some special mathematical fonts
+\newcommand{\bd}[1]{{\bfseries {#1}}}
+%\newcommand{\bm}[1]{\mb{\boldmath ${#1}$}}
+\newcommand{\bb}[1]{\mathbb{#1}}
+\newcommand{\mc}[1]{\mathcal{#1}}
+\newcommand{\ms}[1]{\mathscr{#1}}
+\newcommand{\mf}[1]{\mathfrak{#1}}
+\newcommand{\mcA}{\mathcal{A}}
+\newcommand{\mcB}{\mathcal{B}}
+\newcommand{\mcC}{\mathbb{C}}
+\newcommand{\mcD}{\mathcal{D}}
+\newcommand{\mcE}{\mathcal{E}}
+\newcommand{\mcF}{\mathcal{F}}
+\newcommand{\mcG}{\mathcal{G}}
+\newcommand{\mcH}{\mathcal{H}}
+\newcommand{\mcI}{\mathcal{I}}
+\newcommand{\mcJ}{\mathcal{J}}
+\newcommand{\mcK}{\mathcal{K}}
+\newcommand{\mcL}{\mathcal{L}}
+\newcommand{\mcM}{\mathcal{M}}
+\newcommand{\mcN}{\mathcal{N}}
+\newcommand{\mcO}{\mathcal{O}}
+\newcommand{\mcP}{\mathcal{P}}
+\newcommand{\mcQ}{\mathcal{Q}}
+\newcommand{\mcR}{\mathcal{R}}
+\newcommand{\mcS}{\mathcal{S}}
+\newcommand{\mcT}{\mathcal{T}}
+\newcommand{\mcU}{\mathcal{U}}
+\newcommand{\mcV}{\mathcal{V}}
+\newcommand{\mcW}{\mathcal{W}}
+\newcommand{\mcX}{\mathcal{X}}
+\newcommand{\mcY}{\mathcal{Y}}
+\newcommand{\mcZ}{\mathcal{Z}}
+
+
+
+% Some useful user defined commands
+
+\newcommand{\etal}{{\em et al.\/ }}
+\newcommand{\half}{\f {1}{2}}
+\newcommand{\thalf}{\f {1}{2}}
+\newcommand{\rec}[1]{\frac{1}{#1}}
+\newcommand{\intpart}[1]{\lfloor {#1}\rfloor}
+\newcommand{\Ind}{1\!\mathrm{l}}
+\newcommand{\sumin}{\sum_{i=1}^{n}}
+\newcommand{\sumik}{\sum_{i=1}^{k}}
+\newcommand{\sumiy}{\sum_{i=1}^{\iy}}
+\newcommand{\sumjn}{\sum_{j=1}^{n}}
+\newcommand{\sumjk}{\sum_{j=1}^{k}}
+\newcommand{\sumjy}{\sum_{j=1}^{\iy}}
+\newcommand{\sumjzy}{\sum_{j=0}^{\iy}}
+\newcommand{\sumjt}{\sum_{j=1}^{T}}
+\newcommand{\sumkn}{\sum_{k=1}^{n}}
+\newcommand{\sumnk}{\sum_{n=1}^{k}}
+\newcommand{\sumky}{\sum_{k=1}^{\iy}}
+\newcommand{\sumkzy}{\sum_{k=0}^{\iy}}
+\newcommand{\sumly}{\sum_{l=1}^{\iy}}
+\newcommand{\sumny}{\sum_{n=1}^{\iy}}
+\newcommand{\prodin}{\prod_{i=1}^{n}}
+\newcommand{\sumtT}{\sum_{t=1}^{T}}
+\newcommand{\sumtzT}{\sum_{t=0}^{T}}
+\newcommand{\sumty}{\sum_{t=1}^{\iy}}
+\newcommand{\sumtzy}{\sum_{t=0}^{\iy}}
+\newcommand{\sumtTh}{\sum_{t=1}^{T-h}}
+
+\newcommand{\et}[2]{#1_{1},#1_{2},\ld  ,#1_{#2}}
+\newcommand{\lst}[1]{1,2,\ld  ,{#1}}
+\newcommand{\bracketing}[3]{N_{[\,]}(#1,#2,#3)}
+\newcommand{\qv}[2]{\langle #1,#2 \rangle}
+\newcommand{\eqnref}[1]{$(\ref{#1})$}
+\newcommand{\itint}{\int\!\int}
+\newcommand{\limn}{\lim_{n\to\infty}}
+\newcommand{\ind}{\st{\mb{\scriptsize ind}}{\sim}}
+\newcommand{\iid}{\st{\mb{\scriptsize iid}}{\sim}}
+\newcommand{\defMatrix}[1]{(\!(#1)\!)}
+
+
+% Romans
+\renewcommand{\P}{{\rm P}}
+\newcommand{\Q}{\mc{Q}}
+\newcommand{\W}{\mc{W}}
+\newcommand{\E}{{\rm E}}
+\newcommand{\var}{{\rm var}}
+\newcommand{\Var}{{\rm Var}}
+\newcommand{\cov}{{\rm cov}}
+\newcommand{\Cov}{{\rm Cov}}
+\newcommand{\COV}{{\rm COV}}
+\newcommand{\D}{{\rm D}}
+\newcommand{\tr}{{\rm tr}}
+\newcommand{\inter}{{\rm int}}
+\newcommand{\diag}{{\rm diag}}
+\newcommand{\diam}{{\rm diam}}
+\newcommand{\sign}{{\rm sign}}
+\newcommand{\vol}{{\rm vol}}
+\newcommand{\area}{{\rm area}}
+\newcommand{\cone}{{\rm cone}}
+\newcommand{\conv}{{\rm conv}}
+\newcommand{\supp}{{\rm supp}}
+\newcommand{\lin}{{\rm lin}}
+\newcommand{\Aff}{\mathrm{Aff}}
+%\newcommand{\Vec}{{\rm Vec}}
+\newcommand{\argmax}{\mb{\rm argmax}}
+\newcommand{\argmin}{\mb{\rm argmin}}
+\newcommand{\meas}{\mbox{\rm meas}}
+
+\newcommand{\card}{\mbox{\rm card}}
+\newcommand{\logit}{\mbox{\rm logit}}
+\newcommand{\KL}{\mbox{\rm KL}}
+\newcommand{\PT}{\mbox{\rm PT}}
+
+% Relations
+
+\newcommand{\buc}{\bigcup}
+\newcommand{\bic}{\bigcap}
+\newcommand{\imply}{\Longrightarrow}
+\newcommand{\nin}{\not\in}
+\newcommand{\nosubset}{\not\subset}
+\newcommand{\converge}{\rightsquigarrow}
+
+
+% Frequently used Greek Symbols
+% Lower case
+\newcommand{\al}{\alpha}
+\newcommand{\bta}{\beta}
+\newcommand{\ga}{\gamma}
+\newcommand{\de}{\delta}
+\newcommand{\ve}{\varepsilon}
+\newcommand{\ep}{\epsilon}
+\renewcommand{\th}{\theta}
+\newcommand{\thhat}{\hat{\theta}}
+\newcommand{\ka}{\kappa}
+\newcommand{\la}{\lambda}
+\renewcommand{\l}{\lambda}
+\newcommand{\sig}{\sigma}
+\newcommand{\vph}{\varphi}
+\newcommand{\om}{\omega}
+\newcommand{\n}{\nu}
+\renewcommand{\d}{\delta}
+
+% Upper case
+\newcommand{\Ga}{\Gamma}
+\newcommand{\De}{\Delta}
+\newcommand{\Th}{\Theta}
+\newcommand{\La}{\Lambda}
+\newcommand{\Si}{\Sigma}
+\newcommand{\Om}{\Omega}
+
+
+
+%Bold fonts
+\newcommand{\bSigma}{\boldsymbol{\Sigma}}
+\newcommand{\bsigma}{\boldsymbol{\sigma}}
+\newcommand{\balpha}{\boldsymbol{\alpha}}
+\newcommand{\bTheta}{\boldsymbol{\Theta}}
+\newcommand{\btheta}{\boldsymbol{\theta}}
+\newcommand{\bLambda}{\boldsymbol{\Lambda}}
+\newcommand{\blambda}{\boldsymbol{\lambda}}
+\newcommand{\beeta}{\boldsymbol{\eta}}
+\newcommand{\bbeta}{\boldsymbol{\beta}}
+\newcommand{\bDelta}{\boldsymbol{\Delta}}
+\newcommand{\bdelta}{\boldsymbol{\delta}}
+\newcommand{\bnabla}{\boldsymbol{\nabla}}
+\newcommand{\bphi}{\boldsymbol{\phi}}
+\newcommand{\bPhi}{\boldsymbol{\Phi}}
+\newcommand{\bnu}{\boldsymbol{\nu}}
+\newcommand{\bpi}{\boldsymbol{\pi}}
+\newcommand{\bPi}{\boldsymbol{\Pi}}
+\newcommand{\bpsi}{\boldsymbol{\psi}}
+\newcommand{\bXi}{\boldsymbol{\Xi}}
+\newcommand{\bxi}{\boldsymbol{\xi}}
+\newcommand{\bGamma}{\boldsymbol{\Gamma}}
+\newcommand{\bgamma}{\boldsymbol{\gamma}}
+\newcommand{\bPsi}{\boldsymbol{\Psi}}
+\newcommand{\bepsilon}{\boldsymbol{\epsilon}}
+\newcommand{\bvarepsilon}{\boldsymbol{\varepsilon}}
+\newcommand{\bUpsilon}{\boldsymbol{\Upsilon}}
+\newcommand{\bmu}{\boldsymbol{\mu}}
+\newcommand{\bzeta}{\boldsymbol{\zeta}}
+\newcommand{\btau}{\boldsymbol{\tau}}
+\newcommand{\bvarrho}{\boldsymbol{\varrho}}
+\newcommand{\bvarphi}{\boldsymbol{\varphi}}
+\newcommand{\bvartheta}{\boldsymbol{\vartheta}}
+\newcommand{\bOmega}{\boldsymbol{\Omega}}
+\newcommand{\bomega}{\boldsymbol{\omega}}
+\newcommand{\etabb}{\boldsymbol{\eta}}
+\newcommand{\bK}{\boldsymbol{K}}
+\newcommand{\bA}{\boldsymbol{A}}
+\newcommand{\bB}{\boldsymbol{B}}
+\newcommand{\ba}{\boldsymbol{a}}
+\newcommand{\bba}{\boldsymbol{b}}
+\newcommand{\bC}{\boldsymbol{C}}
+\newcommand{\bc}{\boldsymbol{c}}
+\newcommand{\bD}{\boldsymbol{D}}
+\newcommand{\bdd}{\boldsymbol{d}}
+\newcommand{\bff}{\boldsymbol{f}}
+\newcommand{\bV}{\boldsymbol{V}}
+\newcommand{\bv}{\boldsymbol{v}}
+\newcommand{\bG}{\boldsymbol{G}}
+\newcommand{\bH}{\boldsymbol{H}}
+\newcommand{\bmm}{\boldsymbol{m}}
+\newcommand{\bM}{\boldsymbol{M}}
+\newcommand{\bn}{\boldsymbol{n}}
+\newcommand{\bN}{\boldsymbol{N}}
+\newcommand{\bL}{\boldsymbol{L}}
+\newcommand{\bI}{\boldsymbol{I}}
+\newcommand{\bii}{\boldsymbol{i}}
+\newcommand{\bJ}{\boldsymbol{J}}
+\newcommand{\bj}{\boldsymbol{j}}
+\newcommand{\bS}{\boldsymbol{S}}
+\newcommand{\bs}{\boldsymbol{s}}
+\newcommand{\bT}{\boldsymbol{T}}
+\newcommand{\bt}{\boldsymbol{t}}
+\newcommand{\bE}{\boldsymbol{E}}
+\newcommand{\bF}{\boldsymbol{F}}
+\newcommand{\bp}{\boldsymbol{p}}
+\newcommand{\bP}{\boldsymbol{P}}
+\newcommand{\bq}{\boldsymbol{q}}
+\newcommand{\bQ}{\boldsymbol{Q}}
+\newcommand{\bR}{\boldsymbol{R}}
+\newcommand{\br}{\boldsymbol{r}}
+\newcommand{\bW}{\boldsymbol{W}}
+\newcommand{\bu}{\boldsymbol{u}}
+\newcommand{\bU}{\boldsymbol{U}}
+\newcommand{\bx}{\boldsymbol{x}}
+\newcommand{\bX}{\boldsymbol{X}}
+\newcommand{\by}{\boldsymbol{y}}
+\newcommand{\bY}{\boldsymbol{Y}}
+\newcommand{\bZ}{\boldsymbol{Z}}
+\newcommand{\bz}{\boldsymbol{z}}
+\newcommand{\blda}{\boldsymbol{a}}
+\newcommand{\bO}{\boldsymbol{O}}
+\newcommand{\bw}{\boldsymbol{w}}
+\newcommand{\bee}{\boldsymbol{e}}
+\newcommand{\bzero}{\boldsymbol{0}}
+\newcommand{\bone}{\boldsymbol{1}}
+
+
+%Distributions
+\newcommand{\Nor}{\mathrm{Nor}}
+\newcommand{\Unif}{\mathrm{Unif}}
+\newcommand{\Be}{\mathrm{Be}}
+\newcommand{\dGa}{\mathrm{Ga}}
+\newcommand{\Bin}{\mathrm{Bin}}
+\newcommand{\Poi}{\mathrm{Poi}}
+\newcommand{\Gau}{\mathrm{Gau}}
+\newcommand{\MN}{\mathrm{MN}}
+\newcommand{\DP}{\mathrm{DP}}
+\newcommand{\CDP}{\mathrm{CDP}}
+\newcommand{\Dir}{\mathrm{Dir}}
+\newcommand{\Ex}{\mathrm{Ex}}
+\newcommand{\Un}{\mathrm{Un}}
+%Further additions
+
+\newcommand{\BB}{{\mathbb B}}
+\newcommand{\CC}{{\mathbb C}}
+\newcommand{\DD}{{\mathbb D}}
+\newcommand{\EE}{{\mathbb E}}
+\newcommand{\FF}{{\mathbb F}}
+\newcommand{\GG}{{\mathbb G}}
+\newcommand{\HH}{{\mathbb H}}
+\newcommand{\PP}{{\mathbb P}}
+\newcommand{\RR}{{\mathbb R}}
+\newcommand{\NN}{{\mathbb N}}
+\newcommand{\QQ}{{\mathbb Q}}
+\newcommand{\UU}{{\mathbb U}}
+\newcommand{\ZZ}{{\mathbb Z}}
+\newcommand{\Mod}{\mathcal{P}}
+\newcommand{\SSp}{{\mathscr X}}
+\newcommand{\SSsa}{{\mathscr A}}
+\newcommand{\scrP}{{\mathscr P}}
+\newcommand{\scrQ}{{\mathscr Q}}
+\newcommand{\norm}[2]{\,{\|\,{#1}\,\|_{#2}}\,}
+\newcommand{\Bnorm}[2]{\,{\Bigl\|\:{#1}\:\Bigr\|_{#2}}\,}
+\newcommand{\linspan}[1]{\,\langle{#1}\rangle\,} 
+
+\newcommand{\fsz}{\fontsize{10pt}{7.2}\selectfont}
+\def \loe{>_{L}}
+\def \loeeq{\geq_{L}}
+\def \loeq{\geq_{L}}
+\def \nn{\nonumber}
+\def\prm{{\prime}}
+
+\newcommand{\hw}{ {\rm{\color{blue}{SHOW}}}}
+\newcommand{\vsub}{\vspace{-.2in}}
+\newcommand{\vadd}{\vspace{.2in}}
+\newcommand{\qs}{{\rm{\color{blue}{WHY?}}}}
+\newcommand{\armapq}{{ARMA($p, q$)\;}}
+\newcommand{\arp}{{AR($p$)\;}}
+\newcommand{\maq}{{MA($q$)\;}}
+\newcommand{\gammah}{{\gamma(h)}}
+\newcommand{\rhoh}{{\rho(h)}}
+\newcommand{\exr}{{\alert{Exercise: }\quad}}
+\newcommand{\ariy}{{AR($\iy$)\;}}
+\newcommand{\maiy}{{MA($\iy$)\;}}
+\newcommand{\sigz}{\sigma_z^2}
+\newcommand{\arimapdq}{{ARIMA($p,d,q$)\;}}
+\newcommand{\archm}{{ARCH($m$)\;}}
+\newcommand{\carchms}{{GARCH($m, s$)\;}}
+\newcommand{\azul}[1]{\textcolor{blue}{#1}}
+\newcommand{\vermelho}[1]{\textcolor{red}{#1}}
+\newcommand{\verde}[1]{\textcolor{green}{#1}}
+\newcommand{\pret}[1]{\textcolor{sepia}{#1}}
+\newcommand{\intpi}{ \int_{-\pi}^{\pi} }
+\newcommand{\wn}{ {\rm{WN}}(0, \sigz) }
+\newcommand{\vmaiy}{VMA($\iy$)}
+\newcommand{\variy}{VAR($\iy$)}
+\newcommand{\varp}{VAR($p$)}
+\newcommand{\dist}{\stackrel{d}{\rightarrow}}
+\newcommand{\varmapq}{VARMA($p,q$)}
+
+
+
+```{r, echo=FALSE}
+library(forecast)
+library(fpp3)
+library(tidyverse)
+library(tsbox)
+library(zoo)
+library(seasonal)
+library(astsa)
+library(vars)
+```
+
+# ---- Introduction to VAR
+
+## What is this all about?
+
+- This is about regressing *stationary* series on its own lags, and other related series and their lags. 
+
+- Including other series (variables) might be natural from the application standpoint, lead to more accurate forecasts, clarify relationships between temporally evolving variables, and help in other tasks. 
+
+- Vector autoregressions (VARs) are canonical models for multivariate (multiple, vector) stationary series. 
+
+
+## Goals
+
+- The goal here is to review basic facts about VARs, and illustrate VARs through applications. 
+
+- General facts about multivariate time series will also be discussed. 
+
+- There will be many familiar themes (ACVF, autoregression, etc.) from the univariate case but some emphasis will also be on what is different/new. (We will not get into spectral perspective though.)
+
+
+## Setting
+
+- Suppose given a multivariate time series $\mathbf{X}_t = (X_{1,t},\ldots,X_{d,t})'$, $t=1,\ldots,T$, of dimension $d$, where the component series $X_{j,t}$, $j=1,\ldots,d$, are univariate. We focus here on the component series that "look" stationary.
+
+- Next we discuss our first motivating example of this setting
+
+## Motivating example: US quarterly income/consumption
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+# Percentage changes in quarterly personal consumption expenditure and personal disposable income 
+# for the US, 1970 to 2010
+
+us_change |>
+  pivot_longer(c(Consumption, Income), names_to="Series") |>
+  autoplot(value) +
+  labs(y = "% change")
+
+usconsumption <- ts_ts(us_change)[, 1:2]
+```
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+acf(usconsumption,lag.max = 50, type = "correlation", plot = TRUE)
+```
+
+
+# ---- Data/Theory 
+
+## 
+
+- From the data perspective, the goal is to understand what is done with the bivariate series above, a few other analyses that can be carried out and several pitfalls to be aware of. 
+
+- We shall also look into the models used and some of their more theoretical aspects.  
+
+
+## Stationarity, etc.
+
+- The notions of stationarity, ACF, and others used in the univariate case naturally have multivariate analogues. For example:
+
+A $d$-vector time series (model) $\mathbf{X} = \{\mathbf{X}_t\}_{t\in\mathbb{Z}}$ is called *stationary* if $\mathbb{E}\|\mathbf{X}_t\|^2<\infty$ for all $t\in\mathbb{Z}$,
+$$
+\mathbb{E} \mathbf{X}_t = m,\quad \mbox{for all}\quad t\in\mathbb{Z}, 
+$$
+that is, it has a constant mean, and 
+$$
+\mbox{Cov}(\mathbf{X}_{t+h},\mathbf{X}_t) = \mathbb{E}(\mathbf{X}_{t+h} - \mathbb{E}\mathbf{X}_{t+h})(\mathbf{X}_{t}-\mathbb{E}\mathbf{X}_{t})' = \mathbb{E} \mathbf{X}_{t+h} \mathbf{X}_{t}' - mm' = \gamma_{\mathbf{X}}(h),\quad \mbox{for all}\ t,h\in\mathbb{Z}, 
+$$
+for a matrix-valued function $\gamma_{\mathbf{X}}$, called the autocovariance function (ACVF) of $\mathbf{X}$, that is, its covariance between $\mathbf{X}_t$ and $\mathbf{X}_{t+h}$ depends only on the *lag* $h$. Note that
+$$
+\gamma_{\mathbf{X}}(h) = \Big( \gamma_{\mathbf{X},jk}(h) \Big)_{j,k=1,\ldots,d}
+$$
+with e.g.
+$$
+\gamma_{\mathbf{X},12}(h) = \mathbb{E} X_{1,{t+h}} X_{2,t} - m_1m_2.
+$$
+
+##
+
+**Note:** Unlike in the univariate case, $\gamma_{\mathbf{X}}$ is not necessarily symmetric (and one needs to check which convention is used for the definition of ACVF). In fact, we have
+$$
+\gamma_{\mathbf{X}}(-h) = \gamma_{\mathbf{X}}(h)'.
+$$
+
+ACF matrix function is defined as
+$$
+\rho_{\mathbf{X}}(h) = \Big( \frac{\gamma_{\mathbf{X},jk}(h)}{\sqrt{\gamma_{\mathbf{X},jj}(0)\gamma_{\mathbf{X},kk}(0)}} \Big)_{j,k=1,\ldots,d}
+$$
+
+The sample ACVF and ACF are defined by replacing expectations by averages. PACF and sample PACF are defined in a way analogous to the univariate case. 
+
+
+## **Caution about interpreting cross correlations:**
+
+One cannot use the usual $\pm \frac{1.96}{\sqrt{T}}$ bounds to see if cross-correlated.
+
+```{r, warning=FALSE,message=FALSE,echo=TRUE}
+
+  set.seed(13)
+  x1 <- arima.sim(n = 250, list(ar = c(0.9)), sd = sqrt(1)) 
+  x2 <- arima.sim(n = 250, list(ar = c(0.9)), sd = sqrt(1)) 
+  
+  par(mfrow = c(1,2))
+  plot(x1)
+  plot(x2)
+  
+  x <- cbind(x1,x2) 
+  acf(x)
+
+```
+
+## Basic result for cross correlation
+
+Basic result: For many time series models $\{X_{1t}\}$ and $\{X_{2t}\}$ which are independent, one can show that (for fixed $h$),
+$$
+\widehat{\rho}_{12}(h) \approx N\left(0, ~~\frac{1}{T}\sum_h \rho_{11}(h)\rho_{22}(h)\right).
+$$
+Moreover, $\widehat \rho_{12}(h)$ have a non-trivial dependence across $h$.
+
+
+## Prewhiten - simulated example
+
+To test if two time series are cross-correlated, one suggests to "prewhiten" them first, and then test for cross-correlation in the residuals. 
+
+```{r, warning=FALSE,message=FALSE,echo=TRUE}
+#| output-location: slide
+  set.seed(13)
+  x1 <- arima.sim(n = 250, list(ar = c(0.9)), sd = sqrt(1)) 
+  x2 <- arima.sim(n = 250, list(ar = c(0.9)), sd = sqrt(1)) 
+  
+  x1_ar <-arima(x1, order=c(1,0,0), include.mean = FALSE, method = "ML")
+  x2_ar <-arima(x2, order=c(1,0,0), include.mean = FALSE, method = "ML")
+  
+  y1 <- residuals(x1_ar)
+  y2 <- residuals(x2_ar)
+  
+  y <- cbind(y1,y2) 
+  
+  par(mar=c(3,3,3,3))
+  acf(y)
+
+```
+
+## Prewhiten - usconsumption example 
+
+```{r, warning=FALSE,message=FALSE,echo=TRUE}
+  
+  library(forecast)
+
+  x1 <- usconsumption[,1]
+  x2 <- usconsumption[,2] 
+  
+  acf(cbind(x1, x2))
+  
+  auto.arima(x1,max.p=5,max.q=5,max.P = 0,max.Q=0,ic="aic",allowmean = TRUE)
+  auto.arima(x2,max.p=5,max.q=5,max.P = 0,max.Q=0,ic="aic",allowmean = TRUE)
+  
+  x1_ar <-arima(x1, order=c(0,0,3), include.mean = TRUE, method = "ML")
+  x2_ar <-arima(x2, order=c(0,0,0), include.mean = TRUE, method = "ML")
+  
+  y1 <- residuals(x1_ar)
+  y2 <- residuals(x2_ar)
+  
+  par(mar=c(3,3,3,3))
+  y <- cbind(y1,y2) 
+  acf(y)
+
+```
+
+
+# ---- VAR(p)
+
+## Vector Autoregression (VAR)
+
+**Definition 1.3:** Vector autoregression time series of order $p$ (VAR($p$)) and dimension $d$ (with zero mean) satisfies the equation
+$$
+\mathbf{X}_t = \Phi_1 \mathbf{X}_{t-1} + \ldots + \Phi_p \mathbf{X}_{t-p} + \mathbf{Z}_t,
+$$
+where $\Phi_k$, $k=1,\ldots,p$, are $p$ matrices of dimension $d\times d$, and $\{\mathbf{Z}_t\} \sim \mbox{WN}(0,\Sigma_{\mathbf Z})$. By using the backshift $B$ notation
+
+
+## VAR(p)
+
+the model is also written as 
+
+$$
+\Phi(B)\mathbf{X}_t = \mathbf{Z}_t,
+$$ 
+where 
+$$
+\Phi(z) = I_d  - \Phi_1 z - \ldots - \Phi_p z^p 
+$$
+is the so-called *characteristic (matrix) polynomial*.
+
+## What if mean is not zero
+
+If the mean is not zero, the model is written as $\mathbf{X}_t = \nu+ \Phi_1 \mathbf{X}_{t-1} + \ldots + \Phi_p \mathbf{X}_{t-p} + \mathbf{Z}_t$ or $\mathbf{X}_t - \mu = \Phi_1 (\mathbf{X}_{t-1} -\mu) + \ldots + \Phi_p (\mathbf{X}_{t-p} -\mu) + \mathbf{Z}_t$ .
+
+
+## Some known facts about VARs {.smaller}
+
+  * Stability: It is known that the condition $\mbox{det}(\Phi(z)) = \mbox{det}(I_d - \Phi_1z - \ldots - \Phi_p z^p) \neq 0$, for $|z|\leq 1$, ensures a unique causal stationary solution to the VAR equation.
+  
+  * ACVFs: Except some special cases, the VAR models do not have explicit formulae for the ACVF. This is easy to understand through VAR(1) model.
+  
+  * VARMA models: As in the univariate case, more general VARMA$(p,q)$ can be defined as satisfying the equation
+  $$
+  \mathbf{X}_t = A_1 \mathbf{X}_{t-1} + \ldots + A_p \mathbf{X}_{t-p} + \mathbf{Z}_t + \Theta_1 \mathbf{Z}_{t-1} +\ldots + \Theta_q \mathbf{Z}_{t-q}
+  $$
+  but the class of these models is no longer identifiable. Example? 
+  
+  
+## Can be written as a VAR(1)
+
+  * VAR$(p)$ models can be "embedded" into VAR$(1)$ models. Analysis of the latter model then carries special significance. Example: stability of the model; response analysis below.
+  
+Let's see this...
+
+## 
+
+An $m-$dimensional Vector Autoregressive Moving Average model of order $(p, q)$
+$$
+ \Phi(B) X_t = \Theta(B) Z_t, \qquad Z_t \sim N(0, \Sigma)
+$$
+
+$$
+\Phi(z) = 1_m - \Phi_1 z - \cdots - \Phi_p z^p,  \\
+\Theta(z) = 1_m + \Theta_1 z + \cdots + \Theta_q z^q,
+$$
+
+##
+
+Writing the augmented vector 
+$\bY_t = (\bX_{t}', \ldots, \bX_{t-p+1}', \bZ_t, \ldots, \bZ_{t-q+1}')'$ and 
+$\bW_t = (\bZ_t', \bzero', \ldots, \bzero', \bZ_t',\bzero', \ldots, \bzero')'$
+
+and the matrices 
+$\bPhi_{11} = \bPhi_c$, $\bPhi_{21} = \bzero$
+
+$$ 
+\bPhi_{12} = \begin{bmatrix} \bTheta_1 & \cdots & \bTheta_{q-1} & \bTheta_q \\
+\bzero & \cdots & \bzero & \bzero \\
+\vdots &  & \vdots & \vdots\\
+\bzero & \cdots & \bzero & \bzero
+\end{bmatrix} \;\;
+\bPhi_{22} = \begin{bmatrix} \bzero & \cdots & \bzero & \bzero \\
+\bI & \cdots & \bzero & \bzero \\
+\vdots &  & \vdots & \vdots\\
+\bzero & \cdots & \bI & \bzero
+\end{bmatrix}
+$$
+
+and 
+$$
+{\tilde{\bPhi}} = \begin{bmatrix} \bPhi_{11} & \bPhi_{12} \\
+\bPhi_{21} & \bPhi_{22} \end{bmatrix} 
+$$ 
+we have 
+$$
+\bY_t = {\tilde{\bPhi}} \bY_{t-1} + \bW_t
+$$
+The representation will come in handy filtering and smoothing of \varmapq processes. 
+  
+  
+## Some notes on estimation {.smaller}
+
+Ordinary least-squares estimation (OLS):
+$$
+(\widehat \Phi_1,\ldots,\widehat \Phi_p) = \mbox{argmin}_{\Phi_1,\ldots,\Phi_p} \sum_{t=p+1}^T  \| \mathbf{X}_t - \Phi_1 \mathbf{X}_{t-1} - \ldots - \Phi_p \mathbf{X}_{t-p}\|^2
+$$
+which is equivalent to running regression per VAR equation. The estimate $\widehat \Sigma_{\mathbf Z}$ is then defined as the sample variance-covariance matrix of the residuals. 
+
+## Some notes on estimation {.smaller}
+
+Shouldn't we use something fancier than OLS? The two natural alternatives give **the same** $\widehat \Phi_1,\ldots,\widehat \Phi_p$:
+
+  * **GLS** (seemingly unrelated regressions) uses the correlation between the equations' errors through $\Sigma_{\mathbf Z}$. But in an unrestricted VAR every equation has *the same regressors* $\mathbf{X}_{t-1},\ldots,\mathbf{X}_{t-p}$, and then GLS = equation-by-equation OLS (Zellner, 1962).
+  * **Gaussian MLE** (conditional on the first $p$ observations) also gives the OLS estimates. Only $\widehat \Sigma_{\mathbf Z}$ differs, by its degrees-of-freedom divisor.
+
+**Takeaway:** fitting a VAR = running $d$ separate OLS regressions; nothing is lost.
+
+Under mild assumptions the estimators are asymptotically normal: with $\Phi = (\Phi_1,\ldots,\Phi_p)$ and $\Gamma = E[\mathbf{x}_t\mathbf{x}_t']$, $\mathbf{x}_t = (\mathbf{X}_{t-1}',\ldots,\mathbf{X}_{t-p}')'$,
+$$
+\sqrt{T}\,\mathrm{vec}(\widehat \Phi - \Phi) \xrightarrow{d} N\left(0,\ \Gamma^{-1} \otimes \Sigma_{\mathbf Z}\right).
+$$
+This is what `vcov()` estimates below, and what the tests (e.g. Granger causality) are built on.
+
+See Lütkepohl (2005), Section 3.2.1, pp. 70–71 and Proposition 3.1.
+
+
+## Model selection, model diagnostics, forecasting, etc 
+
+The principles are similar to what was done for AR$(p)$ models in the univariate case.
+
+To see this lets go back to data example
+
+
+##
+
+The estimated variance-covariance matrix of the parameter estimates is also computed. It is useful e.g. in various formal statistical tests.
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+VARselect(usconsumption, lag.max=8, type="const")$selection
+var <- VAR(usconsumption, p=1, type="const")
+summary(var)
+```
+
+##
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+vcov(var)
+```
+
+## Model diagnostics ...
+
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+resid.var <- resid(var)
+plot.ts(resid.var,ylab = 'Residuals',xlab='Year')
+
+acf(resid.var)
+pacf(resid.var)
+# fit model of order 5 instead?
+```
+
+## Model diagnostics ...
+
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+
+qqnorm(resid.var[,1], main="")
+qqline(resid.var[,1])
+
+
+qqnorm(resid.var[,2], main="")
+qqline(resid.var[,2])
+
+ normality.test(var)
+ # rejecting normality
+
+```
+
+## Prediction
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+pred_var <- predict(var, n.ahead = 8, ci = 0.95)
+pred_var
+```
+
+## Prediction 
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+#| output-location: slide
+
+par(mar=c(3,3,1,1))
+plot(pred_var)
+```
+
+## Compare to univariate 
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+
+  # time series length for out-of-sample forecasting
+  T0 <- 10
+  # length of training data set
+  T <- dim(usconsumption)[1] - T0
+
+  ts <- usconsumption[1:T,]
+  ts1 <- ts[,1]
+  ts2 <- ts[,2]
+  
+  # univariate prediction
+  
+  auto.arima(ts1,max.p=5,max.q=5,max.P = 0,max.Q=0,ic="aic",allowmean = TRUE)
+  auto.arima(ts2,max.p=5,max.q=5,max.P = 0,max.Q=0,ic="aic",allowmean = TRUE)
+  
+  ts1_ar <- arima(ts1, order=c(1,0,1), include.mean = TRUE, method = "ML")
+  ts2_ar <- arima(ts2, order=c(0,0,0), include.mean = TRUE, method = "ML")
+  
+  ts1.forecast <- predict(ts1_ar, T0)
+  ts2.forecast <- predict(ts2_ar, T0)
+  
+  diff1 <- mean((ts1.forecast$pred[1:T0] - usconsumption[(T+1):(T+T0),1])^2)
+  diff2 <- mean((ts2.forecast$pred[1:T0] - usconsumption[(T+1):(T+T0),2])^2)
+  
+  diff1
+  diff2
+  diff1+diff2
+  
+  # multivariate prediction
+  
+  var0 <- VAR(ts, p=5, type="const")
+  pred_var0 <- predict(var0, n.ahead = T0, ci = 0.95)
+  diff1_m <- mean((pred_var0$fcst$Consumption[,1] - usconsumption[(T+1):(T+T0),1])^2)
+  diff2_m <- mean((pred_var0$fcst$Income[,1] - usconsumption[(T+1):(T+T0),2])^2)
+  
+  diff1_m
+  diff2_m
+  diff1_m+diff2_m
+  
+```
+
+# ---- Granger causality
+
+## Granger causality analysis
+
+As in the data example above, consider the bivariate case $d=2$ and VAR$(1)$ model, that is, assuming mean $0$ for simplicity,
+$$
+\left(
+\begin{array}{c}
+X_{1t}\\
+X_{2t}
+\end{array}
+\right) = 
+\left(
+\begin{array}{cc}
+\phi_{11} & \phi_{12}\\
+\phi_{21} & \phi_{22}
+\end{array}
+\right) \left(
+\begin{array}{c}
+X_{1,t-1}\\
+X_{2,t-1}
+\end{array}
+\right) + \left(
+\begin{array}{c}
+Z_{1t}\\
+Z_{2t}
+\end{array}
+\right).
+$$
+
+##
+
+For example, the case
+$$
+\phi_{12} = 0
+$$
+seems special, and has the following interpretation:
+$$
+\phi_{12} = 0 
+\quad \Leftrightarrow\quad  
+X_{1t}(1|\{\mathbf{X}_s,s\leq t\}) = X_{1t}(1|\{X_{1,s},s\leq t\}),
+$$
+where $X_{1t}(1|\Omega_t)$ is the best linear (one-step ahead) predictor of $X_{1,t+1}$ given $\Omega_t$,
+
+## {.smaller}
+
+and also 
+
+$$
+\phi_{12} = 0\quad \Leftrightarrow\quad \mathbb{E}\Big(X_{1,t+1} - X_{1t}(1|\{\mathbf{X}_s,s\leq t\}) \Big)^2 =  \mathbb{E}\Big(X_{1,t+1} - X_{1t}(1|\{X_{1,s},s\leq t\}) \Big)^2.
+$$
+and also 
+$$
+\phi_{12} = 0\quad \Leftrightarrow\quad  X_{1t}(h|\{\mathbf{X}_s,s\leq t\}) = X_{1t}(h|\{X_{1,s},s\leq t\}),\ h=1,2,\ldots
+$$
+
+## 
+
+In these equivalent cases when $\phi_{12}=0$, one says that $X_{2t}$ *does not Granger-cause* $X_{1t}$. And vice versa, if $\phi_{12}\neq 0$, one says that $X_{2t}$ *Granger-causes* $X_{1t}$, in which case 
+$$
+\phi_{12} \neq 0\quad \Leftrightarrow\quad \mathbb{E}\Big(X_{1,t+1} - X_{1t}(1|\{\mathbf{X}_s,s\leq t\}) \Big)^2 < \mathbb{E}\Big(X_{1,t+1} - X_{1t}(1|\{X_{1s},s\leq t\}) \Big)^2.
+$$
+One can then obviously test for Granger causality by testing whether $\phi_{12}=0$. 
+
+
+##
+
+Note that the interpretation of Granger causality is consistent with the data example above. The roles of $X_{1t}$ and $X_{2t}$ can obviously be reversed.
+
+This notion of Granger causality can be extended to subvector series of a general multidimensional vector series $\mathbf{X}_t$. See Lutkepohl [-@lutkepohl:2005], Section 2.3.1 and Section 3.6. In the general case, Granger causality is still about testing some of the coefficients to be zero (e.g. using a Wald-type test). 
+
+**Note:** The above is a "practical" definition. More generally, not necessarily linear MSE is used; more general information is used for conditioning; etc.
+
+## Testing for Causaility
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+
+var <- VAR(usconsumption, p=1, type="const")
+
+var_causality_2 <- causality(var,cause="Income",boot=TRUE)
+var_causality_2$Granger
+
+var_causality_1 <- causality(var,cause="Consumption",boot=TRUE)
+var_causality_1$Granger
+
+```
+
+## 
+
+There is also a related notion of *instant Granger causality*. In the special bivariate case above, it is said that there is NO instantaneous causality between $X_{12}$ and $X_{2t}$ if
+$$
+X_{1t}(1|\{\mathbf{X}_s,s\leq t\},\{X_{2,t+1}\}) = X_{1t}(1|\{\mathbf{X}_s,s\leq t\}),
+$$
+which can be shown to be equivalent to 
+$$
+\mathbb{E}(Z_{1t} Z_{2t}) = 0.
+$$
+
+## 
+
+This notion of instantaneous Granger causality can be extended to subvector series of a general multidimensional vector series $\mathbf{X}_t$. See Lutkepohl [-@lutkepohl:2005], Section 2.3.1 and Section 3.6. In the general case, Granger causality is still about testing some relations in $\Sigma_{\mathbf{Z}}$. 
+
+
+##
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+
+var <- VAR(usconsumption, p=1, type="const")
+var_causality_1 <- causality(var,cause="Consumption",boot=TRUE)
+var_causality_1$Instant
+
+var_causality_2 <- causality(var,cause="Income",boot=TRUE)
+var_causality_2$Instant
+  
+```
+
+
+##
+
+**Note:** Some interesting words of caution about Granger causality can be found in Lutkepohl [-@lutkepohl:2005], pp. 48-51. Punchline: "The previous critical remarks are meant to caution the reader and multiple time series analyst against overinterpreting the evidence from a VAR model. Still, causality analyses are useful tools in practice if these critical points are kept in mind. At the very least, a Granger-causality analysis tells the analyst whether a set of variables contains useful information for improving the predictions of another set of variables."
+
+
+# ---- Impulse response analysis
+
+##
+
+Consider the bivariate VAR$(1)$ model above
+$$
+\mathbf{X}_t =
+\left(
+\begin{array}{c}
+X_{1t}\\
+X_{2t}
+\end{array}
+\right) = 
+\left(
+\begin{array}{cc}
+\phi_{11} & \phi_{12}\\
+\phi_{21} & \phi_{22}
+\end{array}
+\right) \left(
+\begin{array}{c}
+X_{1,t-1}\\
+X_{2,t-1}
+\end{array}
+\right) + \left(
+\begin{array}{c}
+Z_{1t}\\
+Z_{2t}
+\end{array}
+\right) = \Phi \left(
+\begin{array}{c}
+X_{1,t-1}\\
+X_{2,t-1}
+\end{array}
+\right) + \left(
+\begin{array}{c}
+Z_{1t}\\
+Z_{2t}
+\end{array}
+\right).
+$$
+
+##
+
+Assume $\mathbf{X}_{-1}=0$. Note that a shock 
+$$
+\left(
+\begin{array}{c}
+Z_{1,0}\\
+Z_{2,0}
+\end{array}
+\right) =
+\left(
+\begin{array}{c}
+1\\
+0
+\end{array}
+\right)
+$$
+propagates through the system as 
+$$
+\left(
+\begin{array}{c}
+X_{1,0}\\
+X_{2,0}
+\end{array}
+\right) =
+\left(
+\begin{array}{c}
+1\\
+0
+\end{array}
+\right)
+$$
+$$
+\left(
+\begin{array}{c}
+X_{1,1}\\
+X_{2,1}
+\end{array}
+\right) = \left(
+\begin{array}{cc}
+\phi_{11} & \phi_{12}\\
+\phi_{21} & \phi_{22}
+\end{array}
+\right) 
+\left(
+\begin{array}{c}
+1\\
+0
+\end{array}
+\right) = \left(
+\begin{array}{c}
+\phi_{11} \\
+\phi_{21}
+\end{array}
+\right),
+$$
+$$
+\left(
+\begin{array}{c}
+X_{1,2}\\
+X_{2,2}
+\end{array}
+\right) = \left(
+\begin{array}{cc}
+\phi_{11} & \phi_{12}\\
+\phi_{21} & \phi_{22}
+\end{array}
+\right) 
+\left(
+\begin{array}{c}
+\phi_{11} \\
+\phi_{21}
+\end{array}
+\right) = \left(
+\begin{array}{c}
+\phi_{11}^2 + \phi_{12}\phi_{21} \\
+\phi_{21}\phi_{11} + \phi_{22}\phi_{21} 
+\end{array}
+\right),
+$$
+etc. 
+
+##
+
+In fact, one can show that 
+$$
+\left(
+\begin{array}{c}
+X_{1,n}\\
+X_{2,n}
+\end{array}
+\right) = \mbox{the first column of}\ \left(
+\begin{array}{cc}
+\phi_{11} & \phi_{12}\\
+\phi_{21} & \phi_{22}
+\end{array}
+\right)^n = \mbox{the first column of}\ \Phi^n.
+$$
+Similarly, a shock 
+$$
+\left(
+\begin{array}{c}
+Z_{1,0}\\
+Z_{2,0}
+\end{array}
+\right) =
+\left(
+\begin{array}{c}
+0\\
+1
+\end{array}
+\right)
+$$
+propagates through the system as
+$$
+\left(
+\begin{array}{c}
+X_{1,n}\\
+X_{2,n}
+\end{array}
+\right) = \mbox{the second column of}\ \left(
+\begin{array}{cc}
+\phi_{11} & \phi_{12}\\
+\phi_{21} & \phi_{22}
+\end{array}
+\right)^n = \mbox{the second column of}\ \Phi^n.
+$$
+
+## 
+
+The analysis of these true/estimated columns is referred to as *impulse response analysis*.
+
+Note that these columns also appear in the MA$(\infty)$ representation of VAR$(1)$ model
+$$
+\mathbf{X}_t = (I - \Phi B)^{-1} \mathbf{Z}_t = (I + \Phi B + \Phi^2 B + \Phi B^3 + \ldots )  \mathbf{Z}_t 
+=  \mathbf{Z}_t +\Phi  \mathbf{Z}_{t-1} + \Phi^2  \mathbf{Z}_{t-2} + \ldots
+$$
+
+##
+
+This is also the case for more general VAR$(p)$ models. The impulse response coefficients appear as columns in the matrices $\Theta_i$ of the MA$(\infty)$ expansion
+$$
+\mathbf{X}_t =  \mathbf{Z}_t +\Theta_1  \mathbf{Z}_{t-1} + \Theta_2  \mathbf{Z}_{t-2} + \ldots.
+$$
+
+##
+
+Question: What is an orthogonal impulse response analysis?
+
+**Note:** The impulse response coefficients can be used conveniently to express forecast error.
+
+**Note:** Some interesting words of critique about impulse response analysis can be found in Lutkepohl [-@lutkepohl:2005], pp. 62-63. 
+
+## Model fitting
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+
+var <- VAR(usconsumption, p=1, type="const")
+var_irf <- irf(var,n.ahead = 10,ortho = FALSE,boot = TRUE, ci = 0.95,cumulative = FALSE)
+# ortho = TRUE: "renormalizes" the shocks so that Sigma = I
+# cumulative = TRUE: if want cumulative effect of the shocks
+
+par(mfrow = c(2,1),mar=c(2,2,2,2))
+plot(var_irf)
+
+  
+```
+
+##
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+
+var <- VAR(usconsumption, p=1, type="const")
+var_irf <- irf(var,n.ahead = 10,ortho = TRUE,boot = TRUE, ci = 0.95,cumulative = FALSE)
+# ortho = TRUE: "renormalizes" the shocks so that Sigma = I
+# cumulative = TRUE: if want cumulative effect of the shocks
+
+par(mfrow = c(2,1),mar=c(2,2,2,2))
+plot(var_irf)
+
+
+```
+
+## Interpreting orthogonal impulse responses {.smaller}
+
+**Why orthogonalize?** The errors are correlated (here $\mbox{corr}(Z_{1t}, Z_{2t}) \approx 0.39$), so "shock consumption, hold income fixed" is not a realistic experiment. Factor $\Sigma_{\mathbf Z} = PP'$ (Cholesky, $P$ lower triangular) and set $\boldsymbol\varepsilon_t = P^{-1}\mathbf{Z}_t$, which are uncorrelated with unit variance. Then
+$$
+\mathbf{X}_t = \sum_{h \geq 0} \Theta_h P \, \boldsymbol\varepsilon_{t-h},
+$$
+and the orthogonal impulse response at horizon $h$ is $\Theta_h P$.
+
+**Reading the plot:** "Orthogonal Impulse Response from Consumption" = a **one standard deviation** shock to $\varepsilon_{\text{Consumption}}$ at time 0. Each line is the response of a variable $h$ quarters later, in that variable's units (percentage points). The dashed bands are bootstrap 95% intervals; a band covering 0 means no clear effect at that horizon.
+
+**Ordering matters:** a shock to the first variable can move everything at $h=0$. A shock to a later variable cannot move earlier ones at $h=0$. So Income $\to$ Consumption $= 0$ at $h=0$ is **an assumption, not a finding**. Put the "most exogenous" variable first, and check whether reversing the order changes the story.
+
+**This example:**
+
+  * Consumption shock ($0.60$ pp): income rises $0.33$ pp in the same quarter (the correlated part of the shock). Next quarter both are up about $0.2$ pp, and the effect is gone after about 4 quarters.
+  * Income shock ($0.79$ pp): consumption barely responds ($0$ by construction, then $+0.09$ pp). Income oscillates ($-0.20$ at $h=1$) because of its negative own-lag coefficient.
+  * The VAR is stationary, so every response decays to 0. Use `cumulative = TRUE` to see the total (long-run) effect.
+
+
+# ---- Some final notes
+
+
+##
+
+- Many packages (e.g. vars used above) also allow to include in VAR models other exogenous variables. The most common exogenous variables are deterministic trends. "Stochastic" trends will be discussed as another topic.
+  
+- Several books on time series analysis have introductory material on multivariate time series, e.g. Brockwell and Davis [-@brockwell:davis:2016book]. A few other books focus specifically on such time series, most notably Lutkepohl [-@lutkepohl:2005] (but without spectral analysis), as referenced on several occasions above. See also Hannan [-@hannan:1970], Reinsel [-@reinsel:1997].
+  
+
+## Reading
+
+Chapter 7 in Brockwell and Davis [-@brockwell:davis:2016book], Sections 1.7, 5.7 in Shumway and Stoffer [-@shumway:stofer:2011] (with R examples). 
+

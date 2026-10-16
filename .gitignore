@@ -12,8 +12,9 @@
 /slides/03-regression/03c-regression-predictors-applications_files
 /slides/04-arima/04-arima_files
 /slides/04-arima/04-arima_cache
-/slides/09*
-/slides/10*
+/slides/09-var/09-VAR_files
+/slides/09-var/09b-VAR-applications*
+/slides/10-NN/10-NN_files
 
 /slides/05-arima-diagnosics/05-arima-diagnostics_cache
 /slides/05-arima-diagnosics/05-arima-diagnostics_files
