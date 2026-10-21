@@ -1,0 +1,303 @@
+---
+title: "2026 Time Series"
+author: "11B - The Path Forward: Choosing a Method"
+format:
+  revealjs:
+    slide-number: true
+    smaller: false
+    scrollable: true
+    toc: true
+    toc-depth: 1
+    mermaid:
+      theme: neutral
+execute:
+  echo: true
+editor: source
+---
+
+```{r, echo=FALSE}
+library(fpp3)
+```
+
+## Where we are in the course
+
+So far we built a toolbox:
+
+- Decomposition, regression with time series errors
+- ETS, ARIMA, seasonal ARIMA, state space models
+- VAR (several series at once)
+- Neural networks: NNAR, and a first look at RNN / LSTM
+
+**Today's goal:** a map. Given a problem and a dataset, which method is a *reasonable first try*?
+
+This will help us identify the methods we should still cover in this class.
+
+# Tasks
+
+## Time series tasks 
+
+Methods are tools. The first question is **what job** you want done.
+
+1. Forecasting
+2. Classification
+3. Outlier detection
+4. Clustering
+5. Imputation
+
+## Time series tasks
+
+What question do you want answered? 
+
+| Task | The question | Example |
+|---|---|---|
+| **Forecasting** | What happens next? | Next month's sales |
+| **Classification** | What kind of series is this? | ECG: normal or arrhythmia? Walking or running? |
+| **Anomaly detection** | Is this point or window unusual? | Fraud, equipment fault |
+| **Clustering** | Which series behave alike? | Group stores by sales pattern |
+| **Imputation** | What are the missing values? | Sensor dropouts |
+
+This course has focused on forecasting. The other tasks reuse many of the same ideas.
+
+## Same model, different task
+
+An architecture is not "a forecasting model". The *last layer and the loss* decide the task.
+
+| Task | Output | Typical loss |
+|---|---|---|
+| Forecasting | A number (or a distribution) | MSE, MAE, quantile loss |
+| Classification | A class probability (softmax) | Cross-entropy |
+| Anomaly detection | A reconstruction or a score | Reconstruction error |
+| Imputation | Values for the gaps | MSE on masked points |
+
+An LSTM that reads a series can sit under any of these heads.
+
+# Three ways a model sees history
+
+## How does a model see the past?
+
+To forecast the next value, a model has to look at history. Models differ in **how**.
+
+- **Fixed window:** look at the last $p$ values, and nothing older.
+- **Learned state:** read the series one step at a time, keeping a running memory.
+- **Attention:** look back over many steps at once and decide which ones matter.
+
+**Example: predicting tomorrow's ice cream sales.**
+
+- *Fixed window:* "Sales were 50, 55, 60 over the last three days, so tomorrow is about 65." Anything before three days ago is invisible.
+- *Learned state:* read every day in order, updating a running impression ("it's been a hot week and sales are climbing") and forecast from that summary.
+- *Attention:* scan the whole past year and focus on the days that look most like tomorrow, such as the same weekday or the same week last summer.
+
+## Fixed window, learned state, attention
+
+**Fixed window of lags** ("windowed regression")
+
+- Look at the last $p$ values, build a table, fit any regression learner.
+- AR / ARIMA(p,0,0) (linear), NNAR, random forest, XGBoost.
+
+**Learned state** (sequence models)
+
+- Carry a memory forward and update it at each step.
+- RNN, LSTM, GRU.
+
+**Attention / convolution**
+
+- Look back over many steps at once and learn which ones matter.
+- 1-d CNNs, Transformers.
+
+## NNAR vs LSTM
+
+NNAR and LSTM are both neural networks. They differ in **how they use history**.
+
+- **NNAR:** a one-hidden-layer network on $p$ lagged inputs. Anything older than $p$ is invisible.
+- **LSTM:** a learned state, updated at every step, so in principle it can use information from far back.
+
+NNAR is closer in spirit to XGBoost-on-lags than to an LSTM: both turn the series into a table with a fixed window.
+
+NNAR($p$, 0) is the linear AR($p$) model, which connects the neural network back to ARIMA.
+
+## Turning a series into a table
+
+```{r}
+sunspots <- sunspot.year |> as_tsibble()
+
+lag_table <- sunspots |>
+  mutate(lag1 = lag(value, 1), lag2 = lag(value, 2), lag3 = lag(value, 3)) |>
+  filter(!is.na(lag3))
+
+head(lag_table, 4)
+```
+
+- Each row: "given the last three values, what comes next?"
+- Now any regression model can be used: linear regression, random forest, XGBoost, a neural net.
+- Extra columns are easy to add: month of year, holiday flag, price, weather.
+
+# Families of forecasting methods
+
+## Comparison table
+
+| | Classical statistical | Windowed ML (NNAR, RF, XGBoost) | Sequence models (LSTM, etc.) |
+|---|---|---|---|
+| **How history is used** | Model-specific structure | Fixed window of lags | Learned state / attention |
+| **Data needed** | Small | Moderate | Large |
+| **Add covariates** | Awkward | Easy | Possible |
+| **Prediction intervals** | Built in | Simulation or quantile models | Simulation or quantile models |
+| **Interpretability** | High | Medium | Low |
+| **Extrapolating a trend** | Yes | Trees: no | Depends |
+| **Best on** | One short series | Tabular features, many series | Long sequences, many series |
+
+## Local vs global models
+
+**Local:** one model per series (ETS, ARIMA, state space).
+
+**Global:** one model trained on many related series at once (store sales, sensors, users).
+
+- Global models share patterns across series, which helps when each series is short or noisy.
+- Most real wins for tree-based and deep models come from the global setting.
+- With one long series, a well-chosen classical model is often hard to beat.
+
+## What does the evidence say?
+
+- **M4 competition (2018):** the winner combined exponential smoothing with a neural network. Pure ML methods did poorly, and simple combinations of classical methods were hard to beat.
+- **M5 competition (2020, Walmart sales, many related series):** top entries were mostly gradient-boosted trees using many predictors.
+- **Zeng et al. (2023):** a very simple linear model outperformed several Transformer forecasters on common benchmarks.
+
+Message: the best method depends on the **data setting**, and simple baselines deserve respect.
+
+## The M4 and M5 competitions
+
+Open forecasting contests run by Spyros Makridakis: a huge set of real series, forecasts scored on held-out data.
+
+| | **M4 (2018)** | **M5 (2020)** |
+|---|---|---|
+| **Series** | 100,000 | about 42,000 |
+| **Data** | Finance, economics, demographics, industry | Walmart sales: items, stores, states |
+| **Frequency** | Yearly, quarterly, monthly, weekly, daily, hourly | Daily |
+| **Predictors** | None (each series on its own) | Prices, promotions, holidays and events |
+| **Goal** | Point forecasts and prediction intervals | 28 days ahead, plus a quantile (uncertainty) track |
+| **Winner** | Exponential smoothing + LSTM hybrid (Smyl, Uber) | Gradient-boosted trees (LightGBM) on lag, price and calendar features |
+| **Runner-up** | Combination of classical methods, weighted by boosting | Also gradient boosting |
+
+**M4:** combinations and hybrids won. Pure ML mostly lost to simple statistical benchmarks.
+
+**M5:** with many related series and rich predictors, global ML models won.
+
+# The decision guide
+
+## Step 1: what is your task?
+
+```{mermaid}
+flowchart TD
+    A[What do you want to do?] --> B[Forecast the future]
+    A --> C[Label a series or window]
+    A --> D[Find unusual points]
+    A --> E[Group similar series]
+    A --> F[Fill in missing values]
+    B --> B1[Next slide]
+    C --> C1[Classification table]
+    D --> D1[Anomaly table]
+    E --> E1[Clustering table]
+    F --> F1[Imputation table]
+```
+
+## Step 2: choosing a forecasting method
+
+```{mermaid}
+%%| fig-width: 10
+flowchart TD
+    S[Forecasting] --> Q1{How many related series?}
+    Q1 -->|One or a few| Q2{Need intervals or an explainable model?}
+    Q1 -->|Many| Q5{Have useful predictors, calendar effects?}
+    Q2 -->|Yes| M1[ETS / ARIMA / regression with ARIMA errors / state space]
+    Q2 -->|No, series is long and nonlinear| M2[NNAR, boosted trees on lags]
+    Q5 -->|Yes| M3[Global gradient boosting on lag features]
+    Q5 -->|Little or no| Q6{Lots of data and compute?}
+    Q6 -->|Yes| M4[Deep global model: DeepAR, N-BEATS, etc.]
+    Q6 -->|No| M3
+    M1 --> Z[Always benchmark against seasonal naive and ETS]
+    M2 --> Z
+    M3 --> Z
+    M4 --> Z
+```
+
+## Reading the forecasting chart
+
+- It gives a **reasonable first try**, not a guaranteed winner.
+- Start at the top, answer honestly about your data, and follow the arrows.
+- Every path ends at the same place: compare against simple baselines on **held-out data** (time-ordered, never shuffled).
+- If the first try is not much better than seasonal naive, the added complexity is not paying off.
+
+# Other tasks
+
+## Classification
+
+Labels a whole series (or a window of one).
+
+| Approach | Idea | When to use |
+|---|---|---|
+| **Feature-based + trees** | Summarize each series into numbers (e.g. catch22, tsfresh), then random forest / XGBoost | Small to moderate data; fast and a strong baseline |
+| **Distance-based** | Nearest neighbor with dynamic time warping (DTW) | Few examples, series of similar shape |
+| **Convolution-based** | Random convolutional kernels (ROCKET family) | Strong general-purpose option |
+| **Deep sequence models** | CNN / LSTM with a softmax head | Lots of labeled data |
+
+Always split training and test data **by subject** (person, machine), not by row, to avoid leakage.
+
+## Anomaly detection
+
+Finds points or windows that do not look normal.
+
+| Approach | Idea | When to use |
+|---|---|---|
+| **Residual-based** | Fit ETS / ARIMA / STL, flag large residuals | Interpretable, one series, you know what "normal" looks like |
+| **Window + isolation forest** | Turn windows into feature rows, find outliers | Many series, no labels |
+| **Reconstruction error** | Autoencoder or LSTM learns normal behavior, flag poor reconstruction | Lots of normal data, complex patterns |
+| **Forecast-based** | Flag observations far outside the prediction interval | You already have a good forecaster |
+
+Anomalies are rare, so evaluate with precision and recall, not accuracy.
+
+## Clustering and imputation
+
+**Clustering:** which series are alike?
+
+| Approach | Idea |
+|---|---|
+| **Feature-based** | Summarize each series (catch22, trend and seasonality strength), then k-means or hierarchical clustering |
+| **Distance-based** | DTW or correlation distance, then hierarchical clustering |
+| **Model-based** | Fit ARMA / ETS per series, cluster the parameters |
+
+**Imputation:** fill gaps.
+
+| Approach | Idea |
+|---|---|
+| **Interpolation** | Linear or spline; fine for short gaps |
+| **Seasonal / state space** | Kalman smoother (state space) or seasonal decomposition; handles longer gaps with uncertainty |
+| **Learned imputation** | Deep models trained on masked data; large datasets |
+
+# Putting it together
+
+## Rules of thumb
+
+- **One short series, need intervals and explanation:** ETS / ARIMA.
+- **Many predictors, calendar effects, tabular features:** gradient-boosted trees on lag features.
+- **Thousands of related series:** a global model, tree-based or deep.
+- **Strong nonlinear dynamics in one long series:** NNAR (like sunspots).
+- **Different task, same ideas:** features + trees, or a sequence model with a different final layer.
+- **Always:** time-ordered holdout, and a simple baseline.
+
+## Exercise: choose a method
+
+In groups, for each scenario pick a **task**, a **method family**, and say why. What would you check first?
+
+1. Hourly electricity use of one building, 3 years of data.
+2. Daily sales of 500 stores with promotions and holidays.
+3. 40 years of annual GDP for one country.
+4. A brand new product with no sales history.
+5. Heart-rate sensor data: detect abnormal episodes.
+6. 1,000 customers' monthly usage: find groups with similar behavior.
+
+## Summary
+
+- Start with the **task**, then the **data setting** (how many series, how much history, which predictors).
+- Models differ in how they use history: fixed window, learned state, or attention.
+- Classical, windowed ML, and sequence models are complementary.
+- Benchmark everything against simple baselines on time-ordered held-out data.
+- Complexity has to earn its place.

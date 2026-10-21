@@ -1,0 +1,445 @@
+---
+title: "2026 Time Series"
+author: "11A - Applications of the Methods So Far: A Forecasting Bake-off"
+format: revealjs
+editor: source
+toc: true
+toc-depth: 1
+slide-number: true
+smaller: false
+scrollable: true
+execute:
+  echo: true
+  warning: false
+  message: false
+editor_options:
+  chunk_output_type: console
+---
+
+```{r, echo=FALSE}
+library(fpp3)
+library(vars)
+source("bakeoff-helpers.R")
+theme_set(theme_minimal(base_size = 14))
+all_res <- list()   # collects results from each dataset for the summary
+```
+
+# The setup
+
+## What we are doing today
+
+In 10 we met NNAR. Now we ask the practical question:
+
+> **Is a neural network actually better than the models we already know?**
+
+We compare five approaches on four real, freely available datasets that behave very differently.
+
+- Same data, same train / test split, same scoring for every model.
+- The goal is **not** to crown a winner. It is to see *what kind of data favors what kind of model*.
+
+## The contenders
+
+| Model | What it uses | R |
+|---|---|---|
+| **Exponential smoothing (ETS)** | The series' own past, level / trend / seasonal states | `ETS()` |
+| **Univariate ARIMA** | The series' own past, autocorrelation structure | `ARIMA()` |
+| **NNAR** | The series' own past, through a small neural network | `NNETAR()` |
+| **VAR** | Past of the target **and** the other series, jointly | `vars::VAR()` |
+| **Lag regression** | Lagged predictors, with ARIMA errors | `ARIMA(y ~ x_lag)` |
+
+Plus a **benchmark**: naive (repeat the last value) or seasonal naive.
+
+A model that cannot beat the benchmark is not earning its complexity.
+
+## Why no LSTM in the main bake-off?
+
+Fair question after lecture 10. We leave it out of the main comparison for practical reasons:
+
+- **Sample size:** three of the four series have fewer than 200 training observations (insurance has about 25). An LSTM has far more parameters than NNAR, which already struggles on small data.
+- **Reproducibility:** the five contenders run in ordinary R packages. An LSTM needs Keras plus a Python installation (3.9 to 3.11 for `install_keras()`), which many machines do not have set up.
+- **Variability:** random starting weights, plus many choices (window length, number of units, epochs, learning rate, scaling). Results can say more about our choices than about the model.
+- **Tuning and runtime:** a single small LSTM fits in seconds here, but doing it properly means a validation set, early stopping, and many fits to tune the settings.
+
+We still try it **once**, on the one dataset large enough (electricity, about 1,100 days), with the result precomputed so these slides render without Keras. See the bonus slide in the electricity section.
+
+## How the comparison works
+
+1. **Train once:** fit every model on the training period only.
+2. **Score one step ahead:** walk through the test period; at each date every model sees the data up to the day before and predicts the next value. The parameters stay fixed.
+3. **Compare** predictions with what happened: RMSE and MAE. We also report RMSE *relative to the benchmark* (below 1 means better than the benchmark).
+
+All predictors are used **lagged**, so everything a model uses would be known at forecast time. (The code lives in `bakeoff-helpers.R`.)
+
+::: {.callout-note}
+This is one train / test split per dataset. Treat the results as illustrations, not proof.
+:::
+
+## Four datasets, four personalities
+
+| Dataset | Frequency, size | Characteristics | Predictors |
+|---|---|---|---|
+| **US consumption** | Quarterly, ~200 | Growth rates: stationary, noisy, little seasonality | Income, production, savings, unemployment |
+| **Victoria electricity** | Daily, ~1,100 | Strong weekly and yearly seasonality, nonlinear in temperature, holidays | Temperature, holidays |
+| **Lynx and hare** | Annual, 91 | Roughly 10-year nonlinear cycles, predator and prey | Hare pelts |
+| **Insurance quotes** | Monthly, 40 | Tiny sample, noisy, advertising effect | TV advertising |
+
+All four ship with the `fpp3` / `tsibbledata` R packages.
+
+## Where the data come from
+
+- **US consumption** (`us_change`): quarterly percentage changes from the Federal Reserve Bank of St. Louis (FRED).
+- **Victoria electricity** (`vic_elec`): half-hourly operational demand from the Australian Energy Market Operator, with Melbourne temperature. We aggregate to daily.
+- **Lynx and hare** (`pelt`): Hudson Bay Company annual trading records of lynx and snowshoe hare pelts, 1845–1935.
+- **Insurance** (`insurance`): monthly quotations and TV advertising spending for a US insurance company, 2002–2005.
+
+# Dataset 1: US consumption
+
+## The data
+
+```{r}
+us_change |> pivot_longer(-Quarter) |>
+  ggplot(aes(Quarter, value)) + geom_line() +
+  facet_grid(name ~ ., scales = "free_y") +
+  labs(x = NULL, y = "% change")
+```
+
+- Percentage changes: no trend, no strong seasonality.
+- **Hard to forecast.** Consumption growth is noisy and mostly unpredictable quarter to quarter.
+
+## Setup
+
+```{r}
+uc <- us_change |>
+  mutate(across(c(Income, Production, Savings, Unemployment),
+                ~ lag(.x, 1), .names = "{.col}_l1")) |>
+  filter(!is.na(Income_l1))
+
+uc_train_end <- yearquarter("2009 Q4")
+c(train = sum(uc$Quarter <= uc_train_end), test = sum(uc$Quarter > uc_train_end))
+```
+
+- Target: `Consumption`. Train through 2009 Q4, test on the rest.
+- Lag regression uses last quarter's income, production, savings and unemployment.
+
+```{r}
+uc_fable <- fit_fable_models(
+  uc, "Consumption", paste0(c("Income", "Production", "Savings", "Unemployment"), "_l1"),
+  uc_train_end, small_p = 2, small_k = 2)
+uc_var <- var_onestep(
+  uc, c("Consumption", "Income", "Production", "Savings", "Unemployment"),
+  "Consumption", uc_train_end, lag_max = 4)
+uc_res <- bind_rows(uc_fable, uc_var)
+all_res$`US consumption` <- uc_res
+```
+
+## What each model chose
+
+```{r}
+attr(uc_fable, "fits")
+```
+
+- `NNAR` is `NNAR(p, ...)` with `p` picked by default from the series' autocorrelation; on this noisy series that is a **large** network for a small sample. `NNAR_small` limits the lags and hidden nodes.
+
+## Results
+
+```{r}
+score_table(uc_res)
+```
+
+```{r}
+#| fig-height: 4
+plot_onestep(uc_res, title = "US consumption growth")
+```
+
+## Takeaways: US consumption
+
+- The best models (VAR, lag regression, ETS) beat the benchmark by only a modest margin: **the data are mostly noise.**
+- The default `NNAR` is **worse than the naive benchmark**: too much flexibility for ~160 noisy observations. Shrinking the network helps, but it still does not beat the simpler models.
+- Information from the other series (VAR, lag regression) helps a bit.
+
+**Lesson:** on short, noisy, roughly linear data, simple models are hard to beat.
+
+# Dataset 2: Victoria electricity
+
+## The data
+
+```{r}
+el <- vic_elec |>
+  index_by(Date) |>
+  summarise(Demand = sum(Demand) / 1000,        # GWh per day
+            Temp = max(Temperature),            # daily maximum temperature
+            Holiday = as.numeric(any(Holiday))) |>
+  mutate(Temp2 = Temp^2,
+         T_l1 = lag(Temp, 1), T2_l1 = lag(Temp2, 1),
+         dow2 = as.numeric(wday(Date) == 2), dow3 = as.numeric(wday(Date) == 3),
+         dow4 = as.numeric(wday(Date) == 4), dow5 = as.numeric(wday(Date) == 5),
+         dow6 = as.numeric(wday(Date) == 6), dow7 = as.numeric(wday(Date) == 7)) |>
+  filter(!is.na(T_l1))
+
+el |> pivot_longer(c(Demand, Temp)) |>
+  ggplot(aes(Date, value)) + geom_line() +
+  facet_grid(name ~ ., scales = "free_y") + labs(x = NULL, y = NULL)
+```
+
+## Demand is nonlinear in temperature
+
+```{r}
+el |> ggplot(aes(Temp, Demand)) + geom_point(alpha = 0.4) +
+  labs(x = "Daily maximum temperature (C)", y = "Demand (GWh)")
+```
+
+- Demand rises when it is **cold** (heating) *and* when it is **hot** (air conditioning): a U shape.
+- Strong **weekly** pattern (weekends) and yearly pattern, plus holidays.
+
+## Setup
+
+```{r}
+el_train_end <- as.Date("2013-12-31")
+c(train = sum(el$Date <= el_train_end), test = sum(el$Date > el_train_end))
+
+el_fable <- fit_fable_models(
+  el, "Demand", c("T_l1", "T2_l1", "Holiday"), el_train_end,
+  naive = "SNAIVE", small_p = 7, small_k = 3, small_P = 1)
+
+el_var <- var_onestep(
+  el, c("Demand", "Temp"), "Demand", el_train_end, lag_max = 8,
+  exog_cols = c("Holiday", paste0("dow", 2:7)))
+
+el_res <- bind_rows(el_fable, el_var)
+all_res$`Victoria electricity` <- el_res
+```
+
+- Train on 2012–2013, test on all of 2014.
+- Lag regression: yesterday's temperature (and its square) and a holiday flag, with seasonal ARIMA errors.
+- VAR: Demand and Temperature jointly, plus day-of-week and holiday indicators (all known in advance).
+
+## What each model chose
+
+```{r}
+attr(el_fable, "fits")
+```
+
+## Results
+
+```{r}
+score_table(el_res)
+```
+
+```{r}
+#| fig-height: 4
+el_res |> filter(date >= as.Date("2014-06-01"), date < as.Date("2014-08-01")) |>
+  plot_onestep(title = "Winter 2014 (June-July)")
+```
+
+## Takeaways: electricity
+
+- **Every model beats the seasonal-naive benchmark by a wide margin**: strong, regular structure is easy to learn.
+- NNAR is **competitive but not the best**. It does about as well as the simple lag regression, and ahead of plain ARIMA, but no better than ETS.
+- VAR does well partly because it was given the day-of-week and holiday information directly. The seasonal models had to infer the weekly pattern.
+- **Lesson:** with strong structure and known calendar effects, giving a model the right *inputs* matters more than a fancier *architecture*.
+
+## Bonus: what about an LSTM?
+
+```{r}
+lstm <- readRDS("lstm-electricity.rds")      # precomputed by lstm-electricity.R
+stopifnot(all.equal(lstm$actual, el_res$actual[el_res$model == "Benchmark"]))
+
+lstm_rmse <- apply(lstm$preds, 2, function(p) sqrt(mean((lstm$actual - p)^2)))
+bench_rmse <- with(el_res |> filter(model == "Benchmark"), sqrt(mean((actual - pred)^2)))
+
+others <- el_res |> group_by(model) |>
+  summarise(RMSE = sqrt(mean((actual - pred)^2)), .groups = "drop")
+
+bind_rows(
+  others,
+  tibble(model = "LSTM (median of 5 seeds)", RMSE = median(lstm_rmse))) |>
+  mutate(`RMSE vs benchmark` = RMSE / bench_rmse) |>
+  arrange(RMSE) |>
+  mutate(across(where(is.numeric), ~ round(.x, 3)))
+```
+
+- The LSTM reads the last 14 days of demand and temperature, plus the same holiday and day-of-week inputs the VAR was given. One layer of 16 units, early stopping, weights fit once on 2012-2013.
+- Across 5 seeds its test RMSE ranged from `r round(min(lstm_rmse), 1)` to `r round(max(lstm_rmse), 1)`; each fit took about `r round(mean(lstm$secs), 1)` seconds.
+- Not tuned, one dataset, one split: this shows where an LSTM *can* land, not a ranking.
+
+# Dataset 3: Lynx and hare
+
+## The data
+
+```{r}
+#| output-location: slide
+pe <- pelt |>
+  mutate(lLynx = log(Lynx), lHare = log(Hare),
+         lHare_l1 = lag(lHare, 1), lHare_l2 = lag(lHare, 2)) |>
+  filter(!is.na(lHare_l2))
+
+pe |> pivot_longer(c(lLynx, lHare)) |>
+  ggplot(aes(Year, value, colour = name)) + geom_line() +
+  labs(x = NULL, y = "log pelts", colour = NULL)
+```
+
+- Predator (lynx) and prey (hare): cycles of about 10 years, with the lynx **lagging** the hare.
+- **Nonlinear** dynamics: cycles are asymmetric (a fast rise and a slower fall).
+
+## Setup
+
+```{r}
+pe_train_end <- 1915
+c(train = sum(pe$Year <= pe_train_end), test = sum(pe$Year > pe_train_end))
+
+pe_fable <- fit_fable_models(
+  pe, "lLynx", c("lHare_l1", "lHare_l2"), pe_train_end, small_p = 2, small_k = 2)
+pe_var <- var_onestep(pe, c("lLynx", "lHare"), "lLynx", pe_train_end, lag_max = 4)
+
+pe_res <- bind_rows(pe_fable, pe_var)
+all_res$`Lynx and hare` <- pe_res
+```
+
+- Target: log lynx pelts (the log stabilizes the variance). Scores are on the log scale.
+- Train through 1915, test 1916–1935 (20 years).
+
+## What each model chose
+
+```{r}
+attr(pe_fable, "fits")
+```
+
+## Results
+
+```{r}
+score_table(pe_res)
+```
+
+```{r}
+#| fig-height: 4
+plot_onestep(pe_res, title = "Lynx (log pelts), 1916-1935")
+```
+
+## Takeaways: lynx and hare
+
+- **NNAR is the best performer here**, with both the default and the small version well ahead of the benchmark. It is the dataset where the neural network earns its place.
+- ETS ends up identical to the benchmark: it cannot represent a cycle, so it just follows the last value.
+- VAR and lag regression use the hare series and do well, but not as well as NNAR's nonlinear fit of the lynx's own history.
+- **Lesson:** nonlinear, cyclical dynamics with a moderate sample is where NNAR shines, as with the sunspots in 10.
+
+# Dataset 4: Insurance quotes
+
+## The data
+
+```{r}
+ins <- insurance |>
+  mutate(TV_l1 = lag(TVadverts, 1), TV_l2 = lag(TVadverts, 2)) |>
+  filter(!is.na(TV_l2))
+
+ins |> pivot_longer(c(Quotes, TVadverts)) |>
+  ggplot(aes(Month, value)) + geom_line() +
+  facet_grid(name ~ ., scales = "free_y") + labs(x = NULL, y = NULL)
+```
+
+- Only **40 months**. Quotes are noisy, with advertising as the only predictor.
+
+## Setup
+
+```{r}
+ins_train_end <- yearmonth("2004 Mar")
+c(train = sum(ins$Month <= ins_train_end), test = sum(ins$Month > ins_train_end))
+
+ins_fable <- fit_fable_models(
+  ins, "Quotes", c("TV_l1", "TV_l2"), ins_train_end, small_p = 2, small_k = 2)
+ins_var <- var_onestep(ins, c("Quotes", "TVadverts"), "Quotes", ins_train_end, lag_max = 3)
+
+ins_res <- bind_rows(ins_fable, ins_var)
+all_res$`Insurance quotes` <- ins_res
+```
+
+- About 25 months to train on and 13 to test. Very little data.
+
+## Results
+
+```{r}
+score_table(ins_res)
+```
+
+```{r}
+#| fig-height: 4
+plot_onestep(ins_res, title = "Insurance quotes")
+```
+
+## Takeaways: insurance
+
+- With so little data, **most models fail to beat the benchmark.** Only VAR shows a clear gain.
+- NNAR is among the worst: a network cannot be learned from ~25 points.
+- A test period of 13 points is also a very noisy judge: rankings here could easily flip with a different split.
+- **Lesson:** small samples reward simple, low-parameter models, and make *any* comparison unreliable.
+
+# What did we learn?
+
+## Everything side by side
+
+RMSE relative to the benchmark (below 1 is better than the benchmark). The best entry in each column is in bold.
+
+```{r}
+rel <- purrr::map_dfr(names(all_res), function(nm) {
+  all_res[[nm]] |>
+    mutate(model = ifelse(grepl("^VAR", model), "VAR", model)) |>
+    group_by(model) |>
+    summarise(rmse = sqrt(mean((actual - pred)^2)), .groups = "drop") |>
+    mutate(rel = rmse / rmse[model == "Benchmark"], dataset = nm)
+}) |>
+  filter(model != "Benchmark") |>
+  dplyr::select(dataset, model, rel) |>
+  pivot_wider(names_from = dataset, values_from = rel)
+
+rel |>
+  mutate(across(-model, ~ ifelse(.x == min(.x), paste0("**", round(.x, 2), "**"), as.character(round(.x, 2))))) |>
+  knitr::kable(format = "markdown", align = "lcccc")
+```
+
+## How stable is NNAR?
+
+NNAR starts from random weights, so the result depends on the seed. The default NNAR re-fit with 8 seeds (test RMSE):
+
+```{r}
+#| cache: false
+seeds_tbl <- bind_rows(
+  tibble(dataset = "US consumption",       rmse = nnar_seeds(uc, "Consumption", uc_train_end)),
+  tibble(dataset = "Victoria electricity", rmse = nnar_seeds(el, "Demand", el_train_end, seeds = 1:4)),
+  tibble(dataset = "Lynx and hare",        rmse = nnar_seeds(pe, "lLynx", pe_train_end)),
+  tibble(dataset = "Insurance quotes",     rmse = nnar_seeds(ins, "Quotes", ins_train_end))
+)
+seeds_tbl |> group_by(dataset) |>
+  summarise(min = min(rmse), median = median(rmse), max = max(rmse)) |>
+  mutate(across(where(is.numeric), ~ round(.x, 3)))
+```
+
+- On some datasets (US consumption, insurance) the spread across seeds is as large as the gap between competing models.
+- Fair practice: report the spread, or average several fits (as `NNETAR()` does with `n_networks`).
+
+## Patterns across the four datasets
+
+| Data feature | What worked | What did not |
+|---|---|---|
+| Short, noisy, near-linear (consumption) | Simple models; extra predictors helped a bit | Default NNAR (overfit) |
+| Strong seasonality and calendar effects (electricity) | Everything beat the benchmark; calendar-aware inputs helped most | Plain ARIMA without calendar inputs |
+| Nonlinear cycles (lynx) | **NNAR** | ETS (cannot represent a cycle) |
+| Tiny sample (insurance) | Low-parameter models (VAR) | NNAR, and any ranking is unreliable |
+
+## Take-home messages
+
+1. **No model wins everywhere.** The data's characteristics decide.
+2. **Neural networks pay off for nonlinear structure** and enough data; elsewhere they match or lose to simpler models.
+3. **The right inputs beat the fancier model:** other series, calendar effects, and sensible lags.
+4. **Always compare to a benchmark** and report variability (seeds, splits).
+5. **One split is one story.** Rolling-origin evaluation and many series give more reliable conclusions.
+
+## Limitations of this bake-off
+
+- Single train / test split per dataset, one-step-ahead only. Multi-step forecasts would change the picture (and lag regression would need predictor forecasts or lags at least as long as the horizon).
+- Little tuning: the NNAR defaults and one "small" variant. VAR lag order was chosen by AIC on the training data.
+- The VAR on the electricity data was given the day-of-week and holiday indicators; the other models got the holiday flag but had to learn the weekly pattern from the series.
+- Point forecasts only; we did not evaluate prediction intervals.
+
+## Where this goes next
+
+- Next: the **path forward**, a decision guide for choosing a method by task and data.
+- Then: tree-based methods and global models, which tackle the cases where one series is not enough.
