@@ -1,4 +1,4 @@
-# Homework 4
+# Homework 4 - Due 10/28/2026
 
 Please complete the following and upload **reproducible code** to the [Github HW4 submissions](https://github.com/jlivsey/UB-fall26-time-series/tree/main/hw/hw4/submissions) repository.
 
