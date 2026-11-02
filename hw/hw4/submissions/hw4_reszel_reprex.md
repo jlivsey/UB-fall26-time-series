@@ -32,7 +32,7 @@ housing |> pivot_longer(-Month) |>
   labs(x = NULL, y = "Value")
 ```
 
-![](https://i.imgur.com/FTNrb86.png)<!-- -->
+![](https://i.imgur.com/40ilPJx.png)<!-- -->
 
 ``` r
 
@@ -43,7 +43,7 @@ housing$Mortgage %>% ts(start=c(2010,1), frequency=12) %>%
     y = "Mortgage Rate")
 ```
 
-![](https://i.imgur.com/Iz2Z1Ze.png)<!-- -->
+![](https://i.imgur.com/WODqY2W.png)<!-- -->
 
 ``` r
 
@@ -54,7 +54,7 @@ housing$Permits %>% ts(start=c(2010,1), frequency=12) %>%
        y = "New Permits")
 ```
 
-![](https://i.imgur.com/uC8I6S5.png)<!-- -->
+![](https://i.imgur.com/dRvU3MJ.png)<!-- -->
 
 ``` r
 
@@ -65,10 +65,10 @@ housing$Starts %>% ts(start=c(2010,1), frequency=12) %>%
        y = "Housing Starts")
 ```
 
-![](https://i.imgur.com/045u6zr.png)<!-- -->
+![](https://i.imgur.com/suRxN2N.png)<!-- -->
 There is a clear increasing trend in housing permits and starts, although it appears to level out instead of increasing linearly. Mortgage rate does not appear to have a constant trend, instead showing decreasing trend (with significant noise) from 2010 to 2020, then showing a period of significant decrease followed by a sharp increase.
 
-Mortgage rates do not show any clear seasonality, but the seasonal plot shows mortgage rates are higher in more recent years. Housing starts and new permits appear to be higher in the summer months, but this seasonality is less pronounced for housing permits.
+Mortgage rates do not show any clear seasonality, but the seasonal plot shows mortgage rates are higher in more recent years. Housing starts and new permits appear to be higher in the summer months, but this seasonality is relatively weak.
 
 Changes in permits appears to be strongly correlated with changes in starts. It seems that a decrease in mortgage rate leads to a corresponding increase in starts/permits, while an increase in mortgage rate could correspond to a decrease in the acceleration of starts/permits.
 
@@ -82,13 +82,13 @@ housing$time <- housing$date - min(housing$date)
 plot(lm(Starts~time, data=housing), which=3)
 ```
 
-![](https://i.imgur.com/mXzgHf8.png)<!-- -->
+![](https://i.imgur.com/R8WFvnC.png)<!-- -->
 
 ``` r
 plot(lm(Permits~time, data=housing), which=3)
 ```
 
-![](https://i.imgur.com/LdwZbB1.png)<!-- -->
+![](https://i.imgur.com/qPLGN50.png)<!-- -->
 
 ``` r
 
@@ -104,20 +104,20 @@ Now, we can look at the cross-correlation plots to see which lags to include. We
 prewhiten(diff(housing$logStarts), diff(housing$logPermits))
 ```
 
-![](https://i.imgur.com/Mqgym85.png)<!-- -->
+![](https://i.imgur.com/M2DZE6q.png)<!-- -->
 
 ``` r
 prewhiten(diff(housing$logStarts), diff(housing$Mortgage))
 ```
 
-![](https://i.imgur.com/cjDA61w.png)<!-- -->
+![](https://i.imgur.com/SIHjLUk.png)<!-- -->
 
 ``` r
 
 acf(housing$logStarts)
 ```
 
-![](https://i.imgur.com/QxkFlF3.png)<!-- -->
+![](https://i.imgur.com/QMsQAYq.png)<!-- -->
 
 ``` r
 
@@ -139,7 +139,7 @@ c(train = sum(housing_upd$Month <= housing_train_end),
 
 Based off the acf plots, we will consider lag 1 of log housing permits and lag 2 of mortgage rate. We create variables for lag 1,2, and 3 of each variable since those are needed for later. We will exclude the first 3 observations so none of these lagged variables have missing data, and all the fitted models are fit on the same training data.
 
-For this data set, since it expresses seasonality and is a relatively short series with only a few covariates, we might expect classic models such as ARIMA to perform the best. We might expect NNAR to do the worst due to the small data set.
+For this data set, since it expresses seasonality and is a relatively short series with only a few covariates, we might expect classic, simpler models such as ARIMA and exponential smoothing to perform the best. We might expect NNAR to do the worst due to the small data set.
 
 ## Part 1b
 
@@ -167,7 +167,7 @@ score_table(housing_result)
 plot_onestep(housing_result, title = "Log Housing Starts (1/2022-9/2026)")
 ```
 
-![](https://i.imgur.com/xEyBHV2.png)<!-- -->
+![](https://i.imgur.com/Nrs5FJm.png)<!-- -->
 
 ``` r
 
@@ -215,7 +215,22 @@ seasonal_naive_preds <- refit(
   )
 
 housing_bench <- seasonal_naive_preds |>
-  summarise(b = sqrt(mean((actual - pred)^2))) |> pull(b)
+  summarise(mse = sqrt(mean((actual - pred)^2))) |> pull(mse)
+
+housing_bench_results <- seasonal_naive_preds |>
+  summarise(
+    RMSE = sqrt(mean((actual - pred)^2, na.rm = TRUE)),
+    MAE = mean(abs(actual - pred), na.rm = TRUE)
+  ) |>
+  mutate(`RMSE vs benchmark` = RMSE / housing_bench,
+         model = "Baseline") |>
+  arrange(RMSE)
+
+print(housing_bench_results)
+#> # A tibble: 1 × 4
+#>    RMSE    MAE `RMSE vs benchmark` model   
+#>   <dbl>  <dbl>               <dbl> <chr>   
+#> 1 0.111 0.0849                   1 Baseline
 
 ############
 ##  ETS   ##
@@ -253,7 +268,7 @@ So, we can conclude that tuning the ETS model does not provide any benefit for t
 
 ``` r
 ets_final_models <- housing_train |> 
-  model(auto_choice = ETS(logStarts ~ error("M") + trend("N") +
+  model(ETS_auto_choice = ETS(logStarts ~ error("M") + trend("N") +
                         season("A")))
 
 ets_predictions <- refit(
@@ -283,9 +298,9 @@ ets_results <- ets_predictions |>
 
 print(ets_results)
 #> # A tibble: 1 × 4
-#>   model         RMSE    MAE `RMSE vs benchmark`
-#>   <chr>        <dbl>  <dbl>               <dbl>
-#> 1 auto_choice 0.0748 0.0587               0.671
+#>   model             RMSE    MAE `RMSE vs benchmark`
+#>   <chr>            <dbl>  <dbl>               <dbl>
+#> 1 ETS_auto_choice 0.0748 0.0587               0.671
 ```
 
 Now, we perform the same process for an ARIMA model. We fit the models on data through 2018, choose the candidate models with the same levels of differencing using Aicc, validate those choices on data from 2019-2020, and then refit the best model by RMSE on the full training set.
@@ -300,45 +315,45 @@ log_starts_all_train_ts <- ts(housing_train$logStarts, start=c(2010,4), frequenc
 acf(log_starts_train_fit_ts, lag.max=48)
 ```
 
-![](https://i.imgur.com/3Dm1kKm.png)<!-- -->
+![](https://i.imgur.com/cZs461V.png)<!-- -->
 
 ``` r
 acf(diff(log_starts_train_fit_ts, 1), lag.max=48)
 ```
 
-![](https://i.imgur.com/dslKSJh.png)<!-- -->
+![](https://i.imgur.com/S6kAuWf.png)<!-- -->
 
 ``` r
 pacf(diff(log_starts_train_fit_ts, 1), lag.max=48)
 ```
 
-![](https://i.imgur.com/FqEkVUx.png)<!-- -->
+![](https://i.imgur.com/0N7hPML.png)<!-- -->
 
 ``` r
 
 acf(diff(log_starts_train_fit_ts, 12), lag.max=48)
 ```
 
-![](https://i.imgur.com/IgEWTxO.png)<!-- -->
+![](https://i.imgur.com/RcxKxn7.png)<!-- -->
 
 ``` r
 pacf(diff(log_starts_train_fit_ts, 12), lag.max=48)
 ```
 
-![](https://i.imgur.com/cv8nxJH.png)<!-- -->
+![](https://i.imgur.com/45TzNqn.png)<!-- -->
 
 ``` r
 
 acf(diff(diff(log_starts_train_fit_ts, 12)), lag.max=48)
 ```
 
-![](https://i.imgur.com/VD9YXHr.png)<!-- -->
+![](https://i.imgur.com/MAcuSHg.png)<!-- -->
 
 ``` r
 pacf(diff(diff(log_starts_train_fit_ts, 12)), lag.max=48)
 ```
 
-![](https://i.imgur.com/V3xi89m.png)<!-- -->
+![](https://i.imgur.com/TTpCXh6.png)<!-- -->
 
 Since the ACF on the non-differenced series decays very slowly, this indicates some level of differencing is needed. If we take the first difference, the first several lags are all non-significant, possibly indicating regular differencing on its own is not appropriate. For the seasonaly differenced series, the ACF and PACF plot direct us to consider p=3, q=0, P=1, and D=0. For the series with both regular and seasonal differencing, the ACF and PACF plot direct us to consider p=2, q=1, P=2, Q=0. In both plots here, the ACF and PACF are negative at lag 1, indicating we may have over-differenced.
 
@@ -403,7 +418,7 @@ arima_options |>
   gg_tsresiduals()
 ```
 
-![](https://i.imgur.com/l0gmviO.png)<!-- -->
+![](https://i.imgur.com/2PFnrCF.png)<!-- -->
 
 ``` r
 
@@ -412,7 +427,7 @@ arima_options |>
   gg_tsresiduals()
 ```
 
-![](https://i.imgur.com/aj7WiXF.png)<!-- -->
+![](https://i.imgur.com/gn2bWP0.png)<!-- -->
 
 ``` r
 
@@ -450,7 +465,7 @@ print(arima_results)
 arima_test_check <- housing_train |>
   model(
     housing_autoarima = ARIMA(logStarts ~ pdq(0,1,2) + PDQ(2,1,0)),
-    housing_autopicked = ARIMA(logStarts ~ pdq(1, 1, 1) + PDQ(0, 1, 1))
+    housing_autopicked_arima = ARIMA(logStarts ~ pdq(1, 1, 1) + PDQ(0, 1, 1))
   )
 
 arima_test_predictions <- refit(
@@ -480,10 +495,10 @@ arima_test_results <- arima_test_predictions |>
 
 print(arima_test_results)
 #> # A tibble: 2 × 4
-#>   model                RMSE    MAE `RMSE vs benchmark`
-#>   <chr>               <dbl>  <dbl>               <dbl>
-#> 1 housing_autopicked 0.0848 0.0705               0.761
-#> 2 housing_autoarima  0.0967 0.0760               0.868
+#>   model                      RMSE    MAE `RMSE vs benchmark`
+#>   <chr>                     <dbl>  <dbl>               <dbl>
+#> 1 housing_autopicked_arima 0.0848 0.0705               0.761
+#> 2 housing_autoarima        0.0967 0.0760               0.868
 ```
 
 The tuned arima model does not appear to show any benefit over the baseline arima model.
@@ -493,7 +508,7 @@ Now, we fit the NNAR models for a variety of small p,k. We fit the models on the
 ``` r
 nnar_pPks <- expand.grid(
   p = c(1,2,3,5,7),
-  P = 1,
+  P = c(0,1),
   k = c(1,2,3,5,7)
 )
 
@@ -513,7 +528,7 @@ for (i in seq_len(nrow(nnar_pPks))) {
           p = nnar_pPks$p[i],
           P = nnar_pPks$P[i],
           period = 12
-        ) + lag1_logPermits + lag2_Mortgage,
+        ),
         n_nodes = nnar_pPks$k[i]
       )
     )
@@ -542,49 +557,71 @@ for (i in seq_len(nrow(nnar_pPks))) {
 }
 nnar_train_results %>% arrange(RMSE)
 #>    p P k      RMSE
-#> 1  5 1 1 0.1028528
-#> 2  3 1 1 0.1049826
-#> 3  2 1 1 0.1050698
-#> 4  1 1 1 0.1056514
-#> 5  7 1 1 0.1069975
-#> 6  5 1 2 0.1344414
-#> 7  3 1 2 0.1356247
-#> 8  2 1 2 0.1417994
-#> 9  7 1 2 0.1425642
-#> 10 1 1 2 0.1544605
-#> 11 2 1 5 0.1619070
-#> 12 5 1 7 0.1642056
-#> 13 5 1 3 0.1661197
-#> 14 7 1 3 0.1665025
-#> 15 3 1 5 0.1716140
-#> 16 2 1 3 0.1748084
-#> 17 2 1 7 0.1748549
-#> 18 3 1 3 0.1777901
-#> 19 1 1 3 0.1784652
-#> 20 3 1 7 0.1796996
-#> 21 1 1 5 0.1871218
-#> 22 5 1 5 0.1880536
-#> 23 7 1 5 0.1938838
-#> 24 7 1 7 0.1987446
-#> 25 1 1 7 0.2036278
+#> 1  5 1 1 0.1233739
+#> 2  2 1 1 0.1261149
+#> 3  1 1 1 0.1261375
+#> 4  3 1 1 0.1268013
+#> 5  7 1 1 0.1291226
+#> 6  7 0 1 0.1339366
+#> 7  5 0 1 0.1390501
+#> 8  7 0 3 0.1408367
+#> 9  1 0 7 0.1409153
+#> 10 7 0 2 0.1414007
+#> 11 1 0 3 0.1435669
+#> 12 1 0 1 0.1437271
+#> 13 3 0 1 0.1448360
+#> 14 1 0 5 0.1464202
+#> 15 2 0 1 0.1465221
+#> 16 5 0 2 0.1468646
+#> 17 7 0 5 0.1492823
+#> 18 1 0 2 0.1505772
+#> 19 3 0 2 0.1530018
+#> 20 5 0 3 0.1539426
+#> 21 7 0 7 0.1543244
+#> 22 2 0 2 0.1553509
+#> 23 5 1 2 0.1559181
+#> 24 5 0 7 0.1570181
+#> 25 7 1 2 0.1584148
+#> 26 3 0 7 0.1589097
+#> 27 2 0 5 0.1599346
+#> 28 2 0 3 0.1619015
+#> 29 5 0 5 0.1641897
+#> 30 2 1 5 0.1642013
+#> 31 3 1 2 0.1650695
+#> 32 2 1 2 0.1653605
+#> 33 3 0 5 0.1653914
+#> 34 1 1 2 0.1658090
+#> 35 2 0 7 0.1680866
+#> 36 2 1 3 0.1697742
+#> 37 3 1 3 0.1720895
+#> 38 3 0 3 0.1725730
+#> 39 3 1 7 0.1764299
+#> 40 3 1 5 0.1797906
+#> 41 2 1 7 0.1811542
+#> 42 5 1 3 0.1828923
+#> 43 1 1 3 0.1842427
+#> 44 5 1 7 0.1911039
+#> 45 5 1 5 0.1931524
+#> 46 1 1 7 0.1942595
+#> 47 7 1 5 0.1976700
+#> 48 7 1 3 0.1981648
+#> 49 7 1 7 0.2020813
+#> 50 1 1 5 0.2174453
 ```
 
-We can see the best choice is p=5, p=1,k=1. So, we consider 5 lags, 1 seasonal lag, and 1 node in the hidden layer. This is a relative simple nueral network, but it uses a moderate number of lags. Now, we consider changing the seeds to see how this choice compares with the baseline model.
+We can see the best choice is p=5, p=1,k=1. So, we consider 5 lags, 1 seasonal lag, and 1 node in the hidden layer. This is a relative simple neural network, but it uses a moderate number of lags. Now, we consider changing the seeds to see how this choice compares with the baseline model.
 
 ``` r
-nnar_manual <- housing_train |>
-  model(nnar = NNETAR(logStarts ~ AR(p = 5 ,P = 1,
-                                     period = 12) + lag1_logPermits + lag2_Mortgage,
-                      n_nodes = 1
-  )
+set.seed(2026)
+nnar_models <- housing_train |>
+  model(nnar_manual = NNETAR(logStarts ~ AR(p = 5 ,P = 1,
+                                     period = 12),
+                      n_nodes = 1),
+        nnar_auto = NNETAR(logStarts ~ AR(p = 2 ,P = 1,
+                                     period = 12),
+                      n_nodes = 2)
   )
 
-nnar_auto <-  housing_train |>
-  model(nnar = NNETAR(logStarts ~ AR(p = 2 ,P = 1,
-                                     period = 12) + lag1_logPermits + lag2_Mortgage,
-                      n_nodes = 2
-  )
-  )
 
 nnar_specs <- list(
   Manual = list(p = 5, P = 1, k = 1),
@@ -605,7 +642,7 @@ for (model_name in names(nnar_specs)) {
             p = spec$p,
             P = spec$P,
             period = 12
-          ) + lag1_logPermits + lag2_Mortgage,
+          ),
           n_nodes = spec$k,
           repeats = 1
         )
@@ -629,8 +666,7 @@ for (model_name in names(nnar_specs)) {
     nnar_test_results_list[[result_idx]] <- data.frame(
       seed = seed,
       model = model_name,
-      RMSE = rmse,
-      mae = mae
+      RMSE = rmse
     )
     result_idx <- result_idx + 1
   }
@@ -639,23 +675,23 @@ for (model_name in names(nnar_specs)) {
 nnar_test_results <- bind_rows(nnar_test_results_list)
 
 nnar_test_results
-#>    seed  model      RMSE        mae
-#> 1     1 Manual 0.1479209 0.12664552
-#> 2     2 Manual 0.1477915 0.12652231
-#> 3     3 Manual 0.1478830 0.12660747
-#> 4     4 Manual 0.1478433 0.12657151
-#> 5     5 Manual 0.1478507 0.12657666
-#> 6     6 Manual 0.1480189 0.12673240
-#> 7     7 Manual 0.1477990 0.12652828
-#> 8     8 Manual 0.1477751 0.12650797
-#> 9     1   Auto 0.1842271 0.14918576
-#> 10    2   Auto 0.1609406 0.14131168
-#> 11    3   Auto 0.1785024 0.15788301
-#> 12    4   Auto 0.1747238 0.14834430
-#> 13    5   Auto 0.1785223 0.15652454
-#> 14    6   Auto 0.1110352 0.08560697
-#> 15    7   Auto 0.1383344 0.12018711
-#> 16    8   Auto 0.1455562 0.11349025
+#>    seed  model       RMSE
+#> 1     1 Manual 0.09288663
+#> 2     2 Manual 0.09284807
+#> 3     3 Manual 0.09276883
+#> 4     4 Manual 0.09282278
+#> 5     5 Manual 0.09274822
+#> 6     6 Manual 0.09282585
+#> 7     7 Manual 0.09293037
+#> 8     8 Manual 0.09276719
+#> 9     1   Auto 0.08761525
+#> 10    2   Auto 0.08699638
+#> 11    3   Auto 0.08699152
+#> 12    4   Auto 0.08807436
+#> 13    5   Auto 0.08825398
+#> 14    6   Auto 0.08788365
+#> 15    7   Auto 0.08804930
+#> 16    8   Auto 0.08877765
 
 nnar_test_results |>
   group_by(model) |>
@@ -667,25 +703,50 @@ nnar_test_results |>
 #> # A tibble: 2 × 3
 #>   model  mean_rmse   sd_rmse
 #>   <chr>      <dbl>     <dbl>
-#> 1 Auto       0.159 0.0255   
-#> 2 Manual     0.148 0.0000806
-
-nnar_test_results |>
-  group_by(model) |>
-  summarize(
-    mean_rmse = mean(RMSE, na.rm = TRUE),
-    mean_mae = mean(mae, na.rm = TRUE),
-    .groups = "drop"
-  ) |>
-  mutate(`RMSE vs benchmark` = mean_rmse / housing_bench)
-#> # A tibble: 2 × 4
-#>   model  mean_rmse mean_mae `RMSE vs benchmark`
-#>   <chr>      <dbl>    <dbl>               <dbl>
-#> 1 Auto       0.159    0.134                1.43
-#> 2 Manual     0.148    0.127                1.33
+#> 1 Auto      0.0878 0.000613 
+#> 2 Manual    0.0928 0.0000631
 ```
 
-There appears to be more variation depending on seed in the baseline model, while the manually tuned model shows more stability. This shows that depending on the specific NNAR fit, seed can have a drastic impact. This shows the importance of fitting multiple models and taking averages to have more stable estimates, which R generally does automatically. However, our manually tuned model seems to show a relatively large improvement in RMSE. There is a decent amount of variation in the automatic model due to the seeds, but the improvement seems to be sufficiently large to justify the choice.
+There appears to be slightly more variation depending on seed in the automatic model, while the manually tuned model shows more stability. This shows that depending on the specific NNAR fit, seed can have a impact, but its small in our scenario. Regardless, this demonstrates the importance of fitting multiple models and taking averages to have more stable estimates, which R generally does automatically. However, our manually tuned model seems to show a worsening in terms of RMSE. It could be overfit given the size/complexity of the data. Here are the final models for comparison:
+
+``` r
+nnar_test_preds <- refit(
+  nnar_models,
+  housing_upd,
+  reestimate = FALSE
+) |>
+  augment() |>
+  as_tibble() |>
+  filter(
+    .data[[index_var(housing_upd)]] >
+      max(housing_train_fit[[index_var(housing_train)]])
+  ) |>
+  transmute(
+    model = .model,
+    date = .data[[index_var(housing_upd)]],
+    actual = logStarts,
+    pred = .fitted
+  )
+
+nnar_test_metrics <- nnar_test_preds |>
+  group_by(model) |>
+  summarise(
+    RMSE = sqrt(mean((actual - pred)^2, na.rm = TRUE)),
+    MAE = mean(abs(actual - pred), na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  mutate(`RMSE vs benchmark` = RMSE / housing_bench) |>
+  arrange(RMSE)
+
+nnar_test_metrics
+#> # A tibble: 2 × 4
+#>   model         RMSE    MAE `RMSE vs benchmark`
+#>   <chr>        <dbl>  <dbl>               <dbl>
+#> 1 nnar_auto   0.0880 0.0674               0.790
+#> 2 nnar_manual 0.0955 0.0763               0.858
+```
+
+The manually tuned model performs worse here in terms of RMSE.
 
 Now, we tune the VAR models. We will use both AicC and BIC to select the value of p. We will also include different combinations of lags for parameters and including dummy monthly variables to attempt to explain some of the seasonality:
 
@@ -870,7 +931,7 @@ Now, we fit the selected model and baseline model on all of the training data, a
 final_housing_var_specs <- tribble(
   ~name, ~vars, ~months, ~p,
   "VAR_permits_noseasonal_p8", c("logStarts", "logPermits"), FALSE, 8,
-  "Auto_selected", c("logStarts", "logPermits", "Mortgage"), FALSE, 4
+  "VAR_Auto_selected", c("logStarts", "logPermits", "Mortgage"), FALSE, 4
 )
 
 var_1step_final <- run_var_models(
@@ -894,12 +955,282 @@ var_1step_info
 #>   model                       lag months   RMSE    MAE `RMSE vs benchmark`
 #>   <chr>                     <dbl> <lgl>   <dbl>  <dbl>               <dbl>
 #> 1 VAR_permits_noseasonal_p8     8 FALSE  0.0880 0.0707               0.790
-#> 2 Auto_selected                 4 FALSE  0.1000 0.0800               0.898
+#> 2 VAR_Auto_selected             4 FALSE  0.1000 0.0800               0.898
 ```
 
 Here, the manually tuned model showed a significant improvement over the auto selected model in terms of RMSE. The improvement is quite large, and noise is likely removed by having fewer variables in the model.
 
-Perhaps removing the mortgage information improved out of sample testing accuracy, and it is possible this model was overfit initially.
+Perhaps removing the mortgage information improved out of sample testing accuracy, and it is possible this model was over fit initially.
+
+Finally, we will fit the lagged regression models. We include various combinations of lag 1, lag 2, and lag 3 predictors. For each option, we also include a simple version which constrains the sum of p,P,q,Q to be less than 4.
+
+``` r
+housing_lr_formulas <- list(
+  all_lag1 = logStarts ~ lag1_Mortgage + lag1_logPermits,
+  mort_lag1 = logStarts ~ lag1_Mortgage,
+  perm_lag1 = logStarts ~ lag1_logPermits,
+  all_lag1_simple = logStarts ~ lag1_Mortgage + lag1_logPermits,
+
+  all_lag2 = logStarts ~ lag2_Mortgage + lag2_logPermits +
+    lag1_Mortgage + lag1_logPermits,
+  mort_lag2 = logStarts ~ lag2_Mortgage + lag1_Mortgage,
+  perm_lag2 = logStarts ~ lag2_logPermits + lag1_logPermits,
+  all_lag2_simple = logStarts ~ lag2_Mortgage + lag2_logPermits +
+    lag1_Mortgage + lag1_logPermits,
+
+  all_lag3 = logStarts ~ lag3_Mortgage + lag3_logPermits +
+    lag2_Mortgage + lag2_logPermits +
+    lag1_Mortgage + lag1_logPermits,
+  mort_lag3 = logStarts ~ lag3_Mortgage + lag2_Mortgage +
+    lag1_Mortgage,
+  perm_lag3 = logStarts ~ lag3_logPermits + lag2_logPermits +
+    lag1_logPermits,
+  all_lag3_simple = logStarts ~ lag3_Mortgage + lag3_logPermits +
+    lag2_Mortgage + lag2_logPermits +
+    lag1_Mortgage + lag1_logPermits
+)
+
+housing_lr_models <- imap(
+  housing_lr_formulas,
+  function(formula, name) {
+    if (grepl("_simple$", name)) {
+      housing_train_fit |>
+        model(
+          fit = ARIMA(
+            formula,
+            order_constraint = p + q + P + Q <= 3
+          )
+        )
+    } else {
+      housing_train_fit |>
+        model(
+          fit = ARIMA(formula)
+        )
+    }
+  }
+)
+
+housing_lr_train_rmse_results <- imap_dfr(housing_lr_models, function(fit, model_name) {
+  forecast(fit, new_data = housing_train_val) |>
+    accuracy(housing_train_val) |>
+    filter(.type == "Test") |>
+    transmute(
+      model = model_name,
+      RMSE
+    )
+}) |>
+  arrange(RMSE)
+
+housing_lr_train_rmse_results
+#> # A tibble: 12 × 2
+#>    model            RMSE
+#>    <chr>           <dbl>
+#>  1 all_lag1_simple 0.102
+#>  2 all_lag1        0.105
+#>  3 perm_lag2       0.105
+#>  4 perm_lag3       0.106
+#>  5 perm_lag1       0.106
+#>  6 all_lag2        0.108
+#>  7 all_lag2_simple 0.108
+#>  8 all_lag3        0.110
+#>  9 all_lag3_simple 0.110
+#> 10 mort_lag2       0.178
+#> 11 mort_lag3       0.184
+#> 12 mort_lag1       0.216
+
+housing_lr_models$all_lag1_simple
+#> # A mable: 1 x 1
+#>                                      fit
+#>                                  <model>
+#> 1 <LM w/ ARIMA(2,0,0)(1,0,0)[12] errors>
+```
+
+Here, we see that simple models containing lag 1 and lag 2 were the best performers in terms of RMSE on the validation set. The models containing mortgage rates only performed extremely poorly. Models with higher levels of p/P/q/Q may be overfit for the data.
+
+We fit our final choice, which includes both lag 1 covariates and has the sum constraint for p,P,q, and Q on the full training data and produce the RMSE for the test data.
+
+``` r
+housing_lr_formulas_final <- housing_train %>% 
+  model(
+    all_lag1_simple = ARIMA(
+      logStarts ~ lag1_Mortgage + lag1_logPermits +
+        pdq(2,0,0) + PDQ(1,0,0)
+    ),
+    auto_picked_lr = ARIMA(
+      logStarts ~ lag2_Mortgage + lag1_logPermits +
+        pdq(0,0,0) + PDQ(2,0,0)
+    )
+  )
+
+housing_lr_final_predictions <- refit(
+  housing_lr_formulas_final,
+  housing_upd,
+  reestimate = FALSE
+) |>
+  augment() |>
+  as_tibble() |>
+  filter(Month > train_end) |>
+  transmute(
+    model = .model,
+    date = Month,
+    actual = logStarts,
+    pred = .fitted
+  )
+
+housing_lr_test_metrics <- housing_lr_final_predictions |>
+  group_by(model) |>
+  summarise(
+    RMSE = sqrt(mean((actual - pred)^2, na.rm = TRUE)),
+    MAE = mean(abs(actual - pred), na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  mutate(`RMSE vs benchmark` = RMSE / housing_bench) |>
+  arrange(RMSE)
+
+housing_lr_test_metrics
+#> # A tibble: 2 × 4
+#>   model             RMSE    MAE `RMSE vs benchmark`
+#>   <chr>            <dbl>  <dbl>               <dbl>
+#> 1 all_lag1_simple 0.0896 0.0697               0.805
+#> 2 auto_picked_lr  0.0959 0.0771               0.861
+```
+
+For the lagged regression, we showed a significant improvement in RMSE, which is clearly an improvement over the auto-choice in face of any random noise from the choice of training/test window. This shows the benefit of considering a wide variety of lagged values and simpler models instead of manually choosing specific lagged predictors and only considering those.
+
+## Part 1d
+
+Now, we print the total table of all our results and a plot of predicted values for the testing set for the top 2 models in terms of RMSE, alongside the true data.
+
+``` r
+all_part1_results <- bind_rows(housing_bench_results, ets_results, arima_test_results,
+                           nnar_test_metrics, var_1step_info %>% 
+                             dplyr::select(model, RMSE, `RMSE vs benchmark`, MAE), 
+                          housing_lr_test_metrics )
+
+all_part1_results %>% arrange(RMSE) %>% relocate(model, .before = everything())
+#> # A tibble: 10 × 4
+#>    model                       RMSE    MAE `RMSE vs benchmark`
+#>    <chr>                      <dbl>  <dbl>               <dbl>
+#>  1 ETS_auto_choice           0.0748 0.0587               0.671
+#>  2 housing_autopicked_arima  0.0848 0.0705               0.761
+#>  3 VAR_permits_noseasonal_p8 0.0880 0.0707               0.790
+#>  4 nnar_auto                 0.0880 0.0674               0.790
+#>  5 all_lag1_simple           0.0896 0.0697               0.805
+#>  6 nnar_manual               0.0955 0.0763               0.858
+#>  7 auto_picked_lr            0.0959 0.0771               0.861
+#>  8 housing_autoarima         0.0967 0.0760               0.868
+#>  9 VAR_Auto_selected         0.1000 0.0800               0.898
+#> 10 Baseline                  0.111  0.0849               1
+
+part1_plot_data <- bind_rows(
+  housing_test %>%
+     as_tibble() %>%
+    transmute(Month, value = logStarts, series = "Actual"),
+
+  ets_predictions %>%
+    as_tibble() %>%
+    transmute(Month= date, value = pred, series = "ETS auto"),
+
+  arima_test_predictions %>%
+    as_tibble() %>%
+    filter(model == "housing_autopicked_arima") %>%
+    transmute(Month = date, value = pred, series = "ARIMA auto")
+)
+
+ggplot(part1_plot_data, aes(x = Month, y = value, color = series)) +
+  geom_line(linewidth = 0.8) +
+  labs(
+    title = "Actual vs Predicted Housing Starts",
+    x = "Month",
+    y = "Log Housing Starts",
+    color = "Series"
+  ) +
+  theme_minimal()
+```
+
+![](https://i.imgur.com/n7dI8XA.png)<!-- -->
+
+Now, we will create a new test/training period, and we will now train through 2023. We will see if this changes how the different models performed.
+
+``` r
+housing_train2 <- housing_upd[housing_upd$date <= '2023-12-01',]
+housing_test2 <- housing_upd[housing_upd$date > "2023-12-01",]
+
+housing_fits_newperiod <- housing_train2 |>
+  model(
+    ets_auto_choice = ETS(logStarts ~ error("M") + trend("N") +
+                        season("A")),
+    housing_autopicked_arima = ARIMA(logStarts ~ pdq(1, 1, 1) + PDQ(0, 1, 1)),
+    nnar_auto = NNETAR(logStarts ~ AR(p = 2 ,P = 1,
+                                     period = 12),
+                      n_nodes = 2),
+    all_lag1_simple = ARIMA(
+      logStarts ~ lag1_Mortgage + lag1_logPermits +
+        pdq(2,0,0) + PDQ(1,0,0)
+    )
+  )
+
+housing_new_period_predictions <- refit(
+  housing_fits_newperiod,
+  housing_upd,
+  reestimate = FALSE
+) |>
+  augment() |>
+  as_tibble() |>
+  filter(Month > yearmonth(as.Date("2023-12-01"))) |>
+  transmute(
+    model = .model,
+    date = Month,
+    actual = logStarts,
+    pred = .fitted
+  )
+
+housing_newperiod_test_metrics <- housing_new_period_predictions |>
+  group_by(model) |>
+  summarise(
+    RMSE = sqrt(mean((actual - pred)^2, na.rm = TRUE)),
+    MAE = mean(abs(actual - pred), na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  arrange(RMSE)
+
+
+var_new_period <- tribble(
+  ~name, ~vars, ~months, ~p,
+  "pna", c("logStarts", "logPermits"), FALSE, 8
+)
+
+var_newperiod_preds <- run_var_models(housing_train2, housing_test2, var_new_period)
+
+var_newperiod_info <- var_newperiod_preds |>
+  group_by(model, lag, months) |>
+  summarise(
+    RMSE = sqrt(mean((actual - predicted)^2, na.rm = TRUE)),
+    MAE = mean(abs(actual - predicted), na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  arrange(RMSE)
+
+housing_newperiod_test_metrics
+#> # A tibble: 4 × 3
+#>   model                      RMSE    MAE
+#>   <chr>                     <dbl>  <dbl>
+#> 1 ets_auto_choice          0.0756 0.0600
+#> 2 all_lag1_simple          0.0792 0.0672
+#> 3 housing_autopicked_arima 0.0828 0.0677
+#> 4 nnar_auto                0.0885 0.0735
+var_newperiod_info
+#> # A tibble: 1 × 5
+#>   model   lag months   RMSE    MAE
+#>   <chr> <dbl> <lgl>   <dbl>  <dbl>
+#> 1 pna       8 FALSE  0.0959 0.0797
+```
+
+When we changed the size of the training/test period to increase the amount of training data, the exponential smoothing model still performed the best. There was some change in the ordering otherwise, with VAR performing worse and lagged regression performing better.
+
+In general, we can say that exponential smoothing methods performed the best in terms of one-step ahead predictions. The rest of the list did change somewhat depending on the training/testing windows, which likely shows the model performance may be somewhat dependent on this choice given the relatively small number of observations. Regardless, the models that performed well were generally those which were simpler, such as exponential smoothing and ARIMA/lagged regression. Give the small data set, NNAR was not expected to perform well, and the results agreed with this prediction.
+
+This specific ranking being dependent on the windows does lead us to question how reliable the window is. With the small number of observations, we expect more variation in predictive ability between models when even small changes are made, such as the size of the training/testing window. However, since ETS performed the best in both scenarios and it makes sense it would perform well for one-step ahead predictions given the data, it may be trustworthy to choose this as the best model.
 
 # Problem 2
 
@@ -964,7 +1295,7 @@ beijing |>
 #> `geom_smooth()` using formula = 'y ~ x'
 ```
 
-![](https://i.imgur.com/qOBkpZg.png)<!-- -->
+![](https://i.imgur.com/Xh80TYG.png)<!-- -->
 
 ``` r
 
@@ -978,7 +1309,7 @@ beijing |>
 #> `geom_smooth()` using formula = 'y ~ x'
 ```
 
-![](https://i.imgur.com/ZIKuMjm.png)<!-- -->
+![](https://i.imgur.com/QjyYGFX.png)<!-- -->
 Dew point, air pressure, and temperature show clear cyclical behavior, while the behavior of pm concentration and wind speed is less clear from these plots. Temperature and dew point appear to show a very minor increasing trend, and wind speed appears to show a very minor decreasing trend. There is no clear trend in the other series. Wind seems to oscillate around some low value, with periods of more spikes/peaks. PM25 concentration appears to be a noisy series.
 
 We can look at some seasonal plots:
@@ -1027,7 +1358,7 @@ lPM_tsibble %>%
   theme_minimal()
 ```
 
-![](https://i.imgur.com/0m7zA2w.png)<!-- -->
+![](https://i.imgur.com/zlk5sqQ.png)<!-- -->
 
 ``` r
 
@@ -1041,7 +1372,7 @@ temp_tsibble %>%
   theme_minimal()
 ```
 
-![](https://i.imgur.com/zm4ss1u.png)<!-- -->
+![](https://i.imgur.com/B4NsObp.png)<!-- -->
 
 ``` r
 
@@ -1055,7 +1386,7 @@ dew_tsibble %>%
   theme_minimal()
 ```
 
-![](https://i.imgur.com/hpRKL64.png)<!-- -->
+![](https://i.imgur.com/JwDxiBT.png)<!-- -->
 
 ``` r
 
@@ -1086,7 +1417,7 @@ ggplot(
   theme_minimal()
 ```
 
-![](https://i.imgur.com/DOZ0gOB.png)<!-- -->
+![](https://i.imgur.com/P6pE3W9.png)<!-- -->
 
 In terms of PM2.5, there appears to be higher concentrations in the winter months and low concentrations in the summer months, as well as high variation in the winter months. There may also be a slightly higher concentration on weekends, but the plot is somewhat unclear. This seasonality does not appear to be drastic, as the series is very noisy.
 
@@ -1096,31 +1427,31 @@ Here are some ACF plots of the data:
 acf(lPM_full_ts, lag.max=365)
 ```
 
-![](https://i.imgur.com/KhwVuwm.png)<!-- -->
+![](https://i.imgur.com/EwEvuLq.png)<!-- -->
 
 ``` r
 acf(temp_full_ts, lag.max=365)
 ```
 
-![](https://i.imgur.com/TCko4b6.png)<!-- -->
+![](https://i.imgur.com/oQQifuk.png)<!-- -->
 
 ``` r
 acf(dew_full_ts, lag.max=365)
 ```
 
-![](https://i.imgur.com/3rY4FGl.png)<!-- -->
+![](https://i.imgur.com/drMgB3w.png)<!-- -->
 
 ``` r
 acf(pres_full_ts, lag.max=365)
 ```
 
-![](https://i.imgur.com/QY7T3Wi.png)<!-- -->
+![](https://i.imgur.com/XWz7Z5r.png)<!-- -->
 
 ``` r
 acf(lWind_full_ts, lag.max=365)
 ```
 
-![](https://i.imgur.com/RMtiRED.png)<!-- -->
+![](https://i.imgur.com/yZspi7N.png)<!-- -->
 
 PM25 concentration does not appear to be heavily autocorrelated, since it appears very noisy and already looks stationary. In all of the other series, there is obvious seasonality/oscilation.
 
@@ -1133,7 +1464,7 @@ ggplot(beijing, aes(x = lPM, y = Temp)) +
 #> `geom_smooth()` using formula = 'y ~ x'
 ```
 
-![](https://i.imgur.com/pYFMqSe.png)<!-- -->
+![](https://i.imgur.com/hOnumti.png)<!-- -->
 
 ``` r
 
@@ -1143,7 +1474,7 @@ ggplot(beijing, aes(x = lPM, y = Dew)) +
 #> `geom_smooth()` using formula = 'y ~ x'
 ```
 
-![](https://i.imgur.com/hCr32fr.png)<!-- -->
+![](https://i.imgur.com/h1gCoBy.png)<!-- -->
 
 ``` r
 
@@ -1153,7 +1484,7 @@ ggplot(beijing, aes(x = lPM, y = Wind)) +
 #> `geom_smooth()` using formula = 'y ~ x'
 ```
 
-![](https://i.imgur.com/tORmOBx.png)<!-- -->
+![](https://i.imgur.com/SEatid2.png)<!-- -->
 
 ``` r
 
@@ -1163,7 +1494,7 @@ ggplot(beijing, aes(x = lPM, y = Pres)) +
 #> `geom_smooth()` using formula = 'y ~ x'
 ```
 
-![](https://i.imgur.com/CZW9J63.png)<!-- -->
+![](https://i.imgur.com/ZETLTb9.png)<!-- -->
 
 There appears to be very moderate linear relationships between PM2.5 concentration and dew point (positive) and between PM2.5 concentration and air pressure (negative). The relationship between wind and PM2.5 and wind does not appear to be linear. Regularly, this may prompt us to consider a transformation of wind speed, depending on which kind of model we choose to use.
 
@@ -1173,25 +1504,25 @@ Now we can look at ccf plots to consider which lags to use in the models. We con
 ccf(lPM_full_ts, diff(diff(temp_full_ts,365)))
 ```
 
-![](https://i.imgur.com/PRYslZs.png)<!-- -->
+![](https://i.imgur.com/zzL8rBN.png)<!-- -->
 
 ``` r
 ccf(lPM_full_ts, diff(diff(dew_full_ts,365)))
 ```
 
-![](https://i.imgur.com/hxE1WG0.png)<!-- -->
+![](https://i.imgur.com/wj9CWVb.png)<!-- -->
 
 ``` r
 ccf(lPM_full_ts, diff(pres_full_ts,365))
 ```
 
-![](https://i.imgur.com/RUgFvou.png)<!-- -->
+![](https://i.imgur.com/AUBK3qz.png)<!-- -->
 
 ``` r
 ccf(lPM_full_ts, diff(diff(lWind_full_ts,365)))
 ```
 
-![](https://i.imgur.com/BDQxySD.png)<!-- -->
+![](https://i.imgur.com/YkAZMFw.png)<!-- -->
 
 ``` r
 
@@ -1243,7 +1574,7 @@ score_table(beijing_result)
 plot_onestep(beijing_result, title = "Log daily average PM2.5 concentration (2014)")
 ```
 
-![](https://i.imgur.com/aXg4DfD.png)<!-- -->
+![](https://i.imgur.com/TINsmS5.png)<!-- -->
 
 ``` r
 
@@ -1322,7 +1653,7 @@ ets_beijing_fits |>
 #> 6 weekly_seasonal_notrend 7156.
 
 ets_beijing_final_models <- beijing_train |> 
-  model(auto_choice = ETS(lPM ~ error("A") + trend("N") +
+  model(auto_et_choice = ETS(lPM ~ error("A") + trend("N") +
                             season("N")))
 
 ets_beijing_predictions <- forecast(
@@ -1419,7 +1750,7 @@ This model performs significantly better than the auto-selected exponential smoo
 
 final_fourier_fit <- beijing_train |>
   model(
-    K9 = TSLM(lPM ~ fourier("1 year", K = 9))
+    ets_K9 = TSLM(lPM ~ fourier("1 year", K = 9))
   )
 
 n_train <- nrow(beijing_train)
@@ -1577,8 +1908,8 @@ We choose the dynamic harmonic regression with k=2. This had the same RMSE as k=
 ``` r
 beijing_arima_final <- beijing_train |>
   model(
-    seasonal_weekly = ARIMA(lPM ~ 1 + PDQ(period = 7)),
-    four02 = ARIMA(lPM ~ fourier(period = "week", K = 2) + PDQ(0,0,0)),
+    seasonal_weekly_ARIMA = ARIMA(lPM ~ 1 + PDQ(period = 7)),
+    four02_ARIMA = ARIMA(lPM ~ fourier(period = "week", K = 2) + PDQ(0,0,0)),
     auto_choice_ARIMA = ARIMA(lPM ~ 1 + pdq(1,0,1) + PDQ(0,0,0))
   )
 
@@ -1589,7 +1920,7 @@ beijing_test_arima_predictions <- refit(
 ) |>
   augment() |>
   as_tibble() |>
-  filter(Date >  beijing_fit_date)  |>
+  filter(Date >  beijing_cutoff_date)  |>
   transmute(
     model = .model,
     Date,
@@ -1609,16 +1940,278 @@ beijing_test_arima_results <- beijing_test_arima_predictions |>
 
 print(beijing_test_arima_results)
 #> # A tibble: 3 × 4
-#>   model              RMSE   MAE `RMSE vs benchmark`
-#>   <chr>             <dbl> <dbl>               <dbl>
-#> 1 four02            0.699 0.549               0.821
-#> 2 auto_choice_ARIMA 0.702 0.549               0.824
-#> 3 seasonal_weekly   0.702 0.549               0.824
+#>   model                  RMSE   MAE `RMSE vs benchmark`
+#>   <chr>                 <dbl> <dbl>               <dbl>
+#> 1 four02_ARIMA          0.717 0.556               0.842
+#> 2 auto_choice_ARIMA     0.718 0.555               0.844
+#> 3 seasonal_weekly_ARIMA 0.718 0.555               0.844
 ```
 
 This model did show a small improvement over the auto-selected model. However, this gain is very modest. It is very possible an adjustment to the training/testing windows leads to different results.
 
-Now, we tune the NNAR models:
+Now, we tune the NNAR models. We will consider small values of p,P,k, since the small NNAR from the baseline fit performed the best. The NNAR fit without restriction from baseline is likely overfit, so we will not consider very large values of p and k.
+
+``` r
+nnar_pPks_beijing <- expand.grid(
+  p = c(1,3,5),
+  P = c(0,1),
+  k = c(1,3,5),
+  covs = c("yes", "no")
+)
+
+nnar_beijing_train_results <- data.frame(
+  p = integer(),
+  P = integer(),
+  k = integer(),
+  covs = character(),
+  RMSE = numeric()
+)
+
+set.seed(12345)
+for (i in seq_len(nrow(nnar_pPks_beijing))) {
+  if(nnar_pPks_beijing$covs[i]=="no"){
+    nnar_fit <- beijing_train_fit |>
+    model(
+      nnar = NNETAR(
+        lPM ~ AR(
+          p = nnar_pPks_beijing$p[i],
+          P = nnar_pPks_beijing$P[i],
+          period = 365
+        ),
+        n_nodes = nnar_pPks_beijing$k[i]
+      )
+    ) 
+  } else{
+    nnar_fit <- beijing_train_fit |>
+    model(
+      nnar = NNETAR(
+        lPM ~ AR(
+          p = nnar_pPks_beijing$p[i],
+          P = nnar_pPks_beijing$P[i],
+          period = 365
+        ) + lag1_lwind + lag2_pres + lag1_dew + lag1_temp,
+        n_nodes = nnar_pPks_beijing$k[i]
+      )
+    ) 
+  }
+  val_preds_nnar <- refit(
+    nnar_fit,
+    beijing_train,
+    reestimate = FALSE
+  ) |>
+    augment() |>
+    as_tibble() |>
+    filter(.data[[index_var(beijing_train)]] %in%
+         beijing_train_val[[index_var(beijing_train_val)]])
+  rmse <- sqrt(mean(
+    (val_preds_nnar$lPM - val_preds_nnar$.fitted)^2,
+    na.rm = TRUE
+  ))
+  nnar_beijing_train_results <- rbind(
+    nnar_beijing_train_results,
+    data.frame(
+      p = nnar_pPks_beijing$p[i],
+      P = nnar_pPks_beijing$P[i],
+      k = nnar_pPks_beijing$k[i],
+      covs = nnar_pPks_beijing$covs[i],
+      RMSE = rmse
+    )
+  )
+}
+nnar_beijing_train_results %>% arrange(RMSE)
+#>    p P k covs      RMSE
+#> 1  5 0 3  yes 0.6468956
+#> 2  3 0 5  yes 0.6482752
+#> 3  3 0 3  yes 0.6489026
+#> 4  5 0 5  yes 0.6492491
+#> 5  5 1 3  yes 0.6550918
+#> 6  1 0 5  yes 0.6554334
+#> 7  1 0 3  yes 0.6561053
+#> 8  3 1 5  yes 0.6604626
+#> 9  3 1 3  yes 0.6614694
+#> 10 5 0 1  yes 0.6639430
+#> 11 3 0 1  yes 0.6641705
+#> 12 1 0 1  yes 0.6642294
+#> 13 1 1 1  yes 0.6651493
+#> 14 5 1 1  yes 0.6654970
+#> 15 3 1 1  yes 0.6658652
+#> 16 5 1 5  yes 0.6663328
+#> 17 1 1 3  yes 0.6667913
+#> 18 1 1 5  yes 0.6722334
+#> 19 3 0 5   no 0.6758532
+#> 20 3 0 3   no 0.6762738
+#> 21 5 0 5   no 0.6779626
+#> 22 5 0 1   no 0.6828253
+#> 23 3 0 1   no 0.6837782
+#> 24 5 1 1   no 0.6848342
+#> 25 3 1 1   no 0.6849738
+#> 26 3 1 3   no 0.6856017
+#> 27 5 0 3   no 0.6856112
+#> 28 1 1 5   no 0.6876385
+#> 29 1 1 3   no 0.6884144
+#> 30 5 1 3   no 0.6885918
+#> 31 3 1 5   no 0.6899807
+#> 32 1 0 3   no 0.6901117
+#> 33 1 0 1   no 0.6909005
+#> 34 1 1 1   no 0.6911616
+#> 35 1 0 5   no 0.6933356
+#> 36 5 1 5   no 0.6969045
+```
+
+Here, the best option is using lag 5 and 3 nodes in the hidden layer, in addition to including the covariate information. We will fit this on the full data to compare the seed spread and overall performance to the small NNAR baseline model, since that is the one which performed the best.
+
+``` r
+set.seed(2026)
+nnar_models_beijing <- beijing_train |>
+  model(nnar_manual = NNETAR(lPM ~ AR(p = 5 ,P = 0,
+                                     period = 365) +
+                               lag1_lwind + lag2_pres + lag1_dew + lag1_temp,
+                      n_nodes = 3),
+        nnar_auto = NNETAR(lPM ~ AR(p = 2 ,P = 0,
+                                     period = 365),
+                      n_nodes = 2)
+  )
+
+
+nnar_beijing_specs <- list(
+  Manual = list(p = 5, P = 0, k = 3),
+  Auto   = list(p = 2, P = 0, k = 2)
+)
+
+nnar_beijing_test_results_list <- vector("list", 8 * length(nnar_beijing_specs))
+result_idx <- 1
+
+for (model_name in names(nnar_beijing_specs)) {
+  spec <- nnar_beijing_specs[[model_name]]
+  for (seed in 1:8) {
+    set.seed(seed)
+    if (model_name=="Manual"){
+      nnar_fit <- beijing_train |>
+      model(
+        nnar = NNETAR(
+          lPM ~ AR(
+            p = spec$p,
+            P = spec$P,
+            period = 365
+         ) + lag1_lwind + lag2_pres + lag1_dew + lag1_temp,
+          n_nodes = spec$k,
+          repeats=1
+      )
+    ) 
+    } else{
+      nnar_fit <- beijing_train |>
+      model(
+        nnar = NNETAR(
+          lPM ~ AR(
+            p = spec$p,
+            P = spec$P,
+            period = 365
+         ),
+          n_nodes = spec$k,
+          repeats=1
+      )
+    ) 
+    } 
+    nnar_preds <- refit(
+      nnar_fit,
+      beijing_upd,
+      reestimate = FALSE
+    ) |>
+      augment() |>
+      as_tibble() |>
+      filter(
+        .data[[index_var(beijing_upd)]] %in%
+          beijing_test[[index_var(beijing_test)]]
+      )
+    rmse <- sqrt(mean(
+      (nnar_preds$lPM - nnar_preds$.fitted)^2,
+      na.rm = TRUE
+    ))
+    mae <- mean(abs(nnar_preds$lPM - nnar_preds$.fitted))
+    nnar_beijing_test_results_list[[result_idx]] <- data.frame(
+      seed = seed,
+      model = model_name,
+      RMSE = rmse
+    )
+    result_idx <- result_idx + 1
+  }
+}
+
+nnar_beijing_test_results <- bind_rows(nnar_beijing_test_results_list)
+
+nnar_beijing_test_results
+#>    seed  model      RMSE
+#> 1     1 Manual 0.7006518
+#> 2     2 Manual 0.6999821
+#> 3     3 Manual 0.7031421
+#> 4     4 Manual 0.7057494
+#> 5     5 Manual 0.7040401
+#> 6     6 Manual 0.7060800
+#> 7     7 Manual 0.7028096
+#> 8     8 Manual 0.7051861
+#> 9     1   Auto 0.7059844
+#> 10    2   Auto 0.7064270
+#> 11    3   Auto 0.7060079
+#> 12    4   Auto 0.7062271
+#> 13    5   Auto 0.7059429
+#> 14    6   Auto 0.7066877
+#> 15    7   Auto 0.7064811
+#> 16    8   Auto 0.7064875
+
+nnar_beijing_test_results |>
+  group_by(model) |>
+  summarize(
+    mean_rmse = mean(RMSE, na.rm = TRUE),
+    sd_rmse = sd(RMSE, na.rm = TRUE),
+    .groups = "drop"
+  )
+#> # A tibble: 2 × 3
+#>   model  mean_rmse  sd_rmse
+#>   <chr>      <dbl>    <dbl>
+#> 1 Auto       0.706 0.000280
+#> 2 Manual     0.703 0.00227
+```
+
+The seed still had a minor effect on the RMSE. This was not much different from the equivalent question in part 1. Here is the full model comparison:
+
+``` r
+nnar_beijing_test_preds <- refit(
+  nnar_models_beijing,
+  beijing_upd,
+  reestimate = FALSE
+) |>
+  augment() |>
+  as_tibble() |>
+  filter(
+    .data[[index_var(beijing_upd)]] >
+      max(beijing_train[[index_var(beijing_train)]])
+  ) |>
+  transmute(
+    model = .model,
+    date = .data[[index_var(beijing_upd)]],
+    actual = lPM,
+    pred = .fitted
+  )
+
+nnar_beijing_test_metrics <- nnar_beijing_test_preds |>
+  group_by(model) |>
+  summarise(
+    RMSE = sqrt(mean((actual - pred)^2, na.rm = TRUE)),
+    MAE = mean(abs(actual - pred), na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  mutate(`RMSE vs benchmark` = RMSE / beijing_bench) |>
+  arrange(RMSE)
+
+nnar_beijing_test_metrics
+#> # A tibble: 2 × 4
+#>   model        RMSE   MAE `RMSE vs benchmark`
+#>   <chr>       <dbl> <dbl>               <dbl>
+#> 1 nnar_manual 0.700 0.544               0.822
+#> 2 nnar_auto   0.706 0.548               0.830
+```
+
+The manually tuned model performed slightly better than the automatically selected baseline NNAR model. Adding covariates provided some predictive benefit, and given the moderate size of the data, this gain is probably larger than the noise.
 
 Now, we tune the VAR models. We first create some day of the week and fouirer series covariates. We will use k=6, which falls in between the choices of k=9 and k=3 from the previous model fits. It would likely be better to use a variety of k, but we will fix k to be one value to keep this part from having too many models to consider.
 
@@ -1815,8 +2408,8 @@ So, the best model for VAR is the model including all of the covariates, not inc
 ``` r
 beijing_specs_test <- tribble(
   ~name, ~vars, ~covs, ~p,
-  "2lag_all_covs", c("lPM", "Temp", "Dew", "Pres", "lWind"), FALSE, 2,
-  "baseline", c("lPM", "Temp", "Dew", "Pres", "lWind"), FALSE, 4
+  "var_2lag_all_covs", c("lPM", "Temp", "Dew", "Pres", "lWind"), FALSE, 2,
+  "var_baseline", c("lPM", "Temp", "Dew", "Pres", "lWind"), FALSE, 4
 )
 
 beijing_var_1step_test <- run_beijing_var_models(
@@ -1839,12 +2432,829 @@ beijing_var_1step_test_info <- beijing_var_1step_test |>
 
 beijing_var_1step_test_info
 #> # A tibble: 2 × 5
-#>   model           lag  RMSE   MAE `RMSE vs benchmark`
-#>   <chr>         <dbl> <dbl> <dbl>               <dbl>
-#> 1 2lag_all_covs     2 0.697 0.544               0.818
-#> 2 baseline          4 0.698 0.546               0.820
+#>   model               lag  RMSE   MAE `RMSE vs benchmark`
+#>   <chr>             <dbl> <dbl> <dbl>               <dbl>
+#> 1 var_2lag_all_covs     2 0.697 0.544               0.818
+#> 2 var_baseline          4 0.698 0.546               0.820
 ```
 
 So, here we see a slight improvement in the test RMSE, but it is very minor. It is very possible a change in the test/training windows could lead to baseline performing better.
 
-<sup>Created on 2026-10-28 with [reprex v2.1.1](https://reprex.tidyverse.org)</sup>
+Finally, we have to fit the lagged regression models:
+
+``` r
+beijing_lr_formulas <- list(
+  all_covs = lPM ~ lag1_temp + lag1_dew + lag2_pres +lag1_lwind,
+  temp = lPM ~ lag1_temp, 
+  dew = lPM ~ lag1_dew,
+  wind = lPM ~ lag1_lwind,
+  temp_wind = lPM ~ lag1_lwind + lag1_temp,
+  temp_dew = lPM ~ lag1_temp + lag1_dew,
+  sq_wind_temp = lPM ~ lag1_lwind + lag1_temp + lag1_lwind**2 + lag1_temp**2,
+  dew_wind_int = lPM  ~ lag1_dew*lag1_lwind
+)
+
+beijing_lr_models <- imap(
+  beijing_lr_formulas,
+  function(formula, name) {
+      beijing_train_fit |>
+        model(
+          fit = ARIMA(
+            formula
+          )
+        )
+  }
+)
+
+beijing_lr_train_rmse_results <- imap_dfr(beijing_lr_models, function(fit, model_name) {
+  forecast(fit, new_data = beijing_train_val) |>
+    accuracy(beijing_train_val) |>
+    filter(.type == "Test") |>
+    transmute(
+      model = model_name,
+      RMSE
+    )
+}) |>
+  arrange(RMSE)
+
+beijing_lr_train_rmse_results
+#> # A tibble: 8 × 2
+#>   model         RMSE
+#>   <chr>        <dbl>
+#> 1 dew_wind_int 0.780
+#> 2 temp_wind    0.783
+#> 3 sq_wind_temp 0.783
+#> 4 dew          0.787
+#> 5 temp         0.797
+#> 6 wind         0.809
+#> 7 all_covs     0.822
+#> 8 temp_dew     0.891
+
+beijing_lr_models$dew_wind_int
+#> # A mable: 1 x 1
+#>                                     fit
+#>                                 <model>
+#> 1 <LM w/ ARIMA(0,1,1)(0,0,1)[7] errors>
+```
+
+The model that performed the best was the model including the dew/wind interactions. Let’s see how this compares to the baseline model.
+
+``` r
+beijing_lr_formulas_final <- beijing_train %>% 
+  model(
+    manual_picked_lr = ARIMA(
+      lPM ~ lag1_dew*lag1_lwind +
+        pdq(0,1,1) + PDQ(0,0,1)
+    ),
+    auto_picked_lr = ARIMA(
+      lPM ~ lag1_lwind + lag2_pres + lag1_dew + lag1_temp + 
+        pdq(1,0,1)
+    )
+  )
+
+beijing_lr_final_predictions <- refit(
+  beijing_lr_formulas_final,
+  beijing_upd,
+  reestimate = FALSE
+) |>
+  augment() |>
+  as_tibble() |>
+  filter(Date > beijing_cutoff_date) |>
+  transmute(
+    model = .model,
+    Date,
+    actual = lPM,
+    pred = .fitted
+  )
+
+beijing_lr_test_metrics <- beijing_lr_final_predictions |>
+  group_by(model) |>
+  summarise(
+    RMSE = sqrt(mean((actual - pred)^2, na.rm = TRUE)),
+    MAE = mean(abs(actual - pred), na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  mutate(`RMSE vs benchmark` = RMSE / beijing_bench) |>
+  arrange(RMSE)
+
+beijing_lr_test_metrics
+#> # A tibble: 2 × 4
+#>   model             RMSE   MAE `RMSE vs benchmark`
+#>   <chr>            <dbl> <dbl>               <dbl>
+#> 1 auto_picked_lr   0.711 0.552               0.836
+#> 2 manual_picked_lr 0.775 0.617               0.911
+```
+
+The manually turned lagged regression performed worse.
+
+## Part 2d
+
+Here is a table of everything:
+
+``` r
+all_part2_results <- bind_rows(ets_beijing_results, beijing_test_arima_results,
+                           nnar_beijing_test_metrics, beijing_var_1step_test_info %>% 
+                             dplyr::select(model, RMSE, `RMSE vs benchmark`, MAE), 
+                          beijing_lr_test_metrics )
+
+all_part2_results %>% arrange(RMSE) %>% relocate(model, .before = everything())
+#> # A tibble: 11 × 4
+#>    model                  RMSE   MAE `RMSE vs benchmark`
+#>    <chr>                 <dbl> <dbl>               <dbl>
+#>  1 var_2lag_all_covs     0.697 0.544               0.818
+#>  2 var_baseline          0.698 0.546               0.820
+#>  3 nnar_manual           0.700 0.544               0.822
+#>  4 nnar_auto             0.706 0.548               0.830
+#>  5 auto_picked_lr        0.711 0.552               0.836
+#>  6 four02_ARIMA          0.717 0.556               0.842
+#>  7 auto_choice_ARIMA     0.718 0.555               0.844
+#>  8 seasonal_weekly_ARIMA 0.718 0.555               0.844
+#>  9 manual_picked_lr      0.775 0.617               0.911
+#> 10 auto_ets_choice       0.842 0.646               0.989
+#> 11 Fourier + ETS         0.843 0.647               0.990
+
+part2_plot_data <- bind_rows(
+  beijing_test %>%
+     as_tibble() %>%
+    transmute(Date, value = lPM, series = "Actual"),
+
+  beijing_var_1step_test %>%
+    as_tibble() %>%
+    transmute(Date, value = predicted, series = "var_2lag_all_covs"),
+
+  beijing_test_arima_predictions %>%
+    as_tibble() %>%
+    filter(model == "four02_ARIMA") %>%
+    transmute(Date, value = pred, series = "four02_ARIMA")
+)
+
+ggplot(part2_plot_data, aes(x = Date, y = value, color = series)) +
+  geom_line(linewidth = 0.8) +
+  labs(
+    title = "Actual vs Predicted PM2.5 concentration",
+    x = "Month",
+    y = "Log PM2.5 concentration",
+    color = "Series"
+  ) +
+  theme_minimal()
+```
+
+![](https://i.imgur.com/YkxgSxK.png)<!-- -->
+The best performing models were the VAR models, dynamic harmonic regression, and NNAR. Let’s refit these on the new training and test period, and we will also evaluate the RMSE only for extreme observations.
+
+``` r
+beijing_train2 <- beijing_upd[beijing_upd$Date <= '2013-06-30',]
+beijing_test2 <- beijing_upd[beijing_upd$Date > "2013-06-30",]
+
+beijing_fits_newperiod <- beijing_train2 |>
+  model(
+    auto_ets_choice = ETS(lPM ~ error("A") + trend("N") +
+                            season("N")),
+    four02_ARIMA = ARIMA(lPM ~ fourier(period = "week", K = 2) + PDQ(0,0,0)),
+    nnar_manual = NNETAR(lPM ~ AR(p = 5 ,P = 0,
+                                     period = 365) +
+                               lag1_lwind + lag2_pres + lag1_dew + lag1_temp,
+                      n_nodes = 3),
+    auto_picked_lr = ARIMA(
+      lPM ~ lag1_lwind + lag2_pres + lag1_dew + lag1_temp + 
+        pdq(1,0,1)
+    )
+  )
+
+beijing_new_period_predictions <- refit(
+  beijing_fits_newperiod,
+  beijing_upd,
+  reestimate = FALSE
+) |>
+  augment() |>
+  as_tibble() |>
+  filter(Date > as.Date("2013-06-30")) |>
+  transmute(
+    model = .model,
+    date = Date,
+    actual = lPM,
+    pred = .fitted
+  )
+
+beijing_newperiod_test_metrics <- beijing_new_period_predictions |>
+  group_by(model) |>
+  summarise(
+    RMSE = sqrt(mean((actual - pred)^2, na.rm = TRUE)),
+    MAE = mean(abs(actual - pred), na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  arrange(RMSE)
+
+n_train2 <- nrow(beijing_train2)
+train_covs_newperiod <- X_all[seq_len(n_train2), , drop = FALSE]
+
+beijing_var_newperiod <- run_beijing_var_models(
+  beijing_train2,
+  beijing_test2,
+  train_covs_newperiod,
+  X_all,
+  beijing_specs_test
+)
+
+beijing_var_newperiod_info <- beijing_var_newperiod |>
+  group_by(model) |>
+  summarise(
+    RMSE = sqrt(mean((actual - predicted)^2, na.rm = TRUE)),
+    MAE = mean(abs(actual - predicted), na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  arrange(RMSE)
+
+beijing_newperiod_test_metrics
+#> # A tibble: 4 × 3
+#>   model            RMSE   MAE
+#>   <chr>           <dbl> <dbl>
+#> 1 nnar_manual     0.679 0.530
+#> 2 auto_picked_lr  0.687 0.538
+#> 3 four02_ARIMA    0.692 0.537
+#> 4 auto_ets_choice 0.818 0.635
+beijing_var_newperiod_info
+#> # A tibble: 2 × 3
+#>   model              RMSE   MAE
+#>   <chr>             <dbl> <dbl>
+#> 1 var_2lag_all_covs 0.674 0.527
+#> 2 var_baseline      0.677 0.531
+```
+
+The VAR models still performed the best. With the new training/test periods, NNAR now performed better than lagged regression and ARIMA, but in each case the RMSE is relatively close. Even with a large data set, the choice of training/testing window still plays an important role. ETS still performs the worst.
+
+``` r
+top10_threshold <- quantile(
+  beijing_new_period_predictions$actual,
+  probs = 0.90,
+  na.rm = TRUE
+)
+
+beijing_newperiod_top10_metrics <- beijing_new_period_predictions |>
+  filter(actual >= top10_threshold) |>
+  group_by(model) |>
+  summarise(
+    n = n(),
+    RMSE_top10 = sqrt(mean((actual - pred)^2, na.rm = TRUE)),
+    MAE_top10 = mean(abs(actual - pred), na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  arrange(RMSE_top10)
+
+top10_threshold_var <- quantile(
+  beijing_var_newperiod$actual,
+  probs = 0.90,
+  na.rm = TRUE
+)
+
+beijing_var_top10_metrics <- beijing_var_newperiod |>
+  filter(actual >= top10_threshold_var) |>
+  group_by(model) |>
+  summarise(
+    n = n(),
+    RMSE_top10 = sqrt(mean((actual - predicted)^2, na.rm = TRUE)),
+    MAE_top10 = mean(abs(actual - predicted), na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  arrange(RMSE_top10)
+
+beijing_top10_results <- bind_rows(
+  beijing_newperiod_top10_metrics,
+  beijing_var_top10_metrics
+) |>
+  arrange(RMSE_top10)
+
+beijing_top10_results
+#> # A tibble: 6 × 4
+#>   model                 n RMSE_top10 MAE_top10
+#>   <chr>             <int>      <dbl>     <dbl>
+#> 1 var_2lag_all_covs    55      0.772     0.716
+#> 2 nnar_manual          55      0.775     0.711
+#> 3 var_baseline         55      0.782     0.725
+#> 4 auto_picked_lr       55      0.799     0.756
+#> 5 auto_ets_choice      55      0.822     0.695
+#> 6 four02_ARIMA         55      0.869     0.825
+```
+
+If we are interesting in performance when predicting the extreme observations, ARIMA does significantly worse than VAR and NNAR. This is because VAR and NNAR are better suited to the complex seasonality and non-linear behavior that may characterize the high peaks, while simpler models like ARIMA and ETS tend to be more conservative in their predictions.
+
+# Part 3
+
+## Part 3a
+
+``` r
+housing_selected_models <- c(
+  "ETS_auto_choice",
+  "housing_autoarima",
+  "nnar_manual",
+  "all_lag1_simple",
+  "VAR_permits_noseasonal_p8"
+)
+
+housing_results_table <- all_part1_results |>
+  dplyr::filter(model %in% housing_selected_models) |>
+  dplyr::select(model, RMSE) |>
+  mutate(
+    model = recode(
+      model,
+      "ETS_auto_choice" = "ETS",
+      "housing_autoarima" = "ARIMA",
+      "nnar_manual" = "NNAR",
+      "all_lag1_simple" = "LaggedRegression",
+      "VAR_permits_noseasonal_p8" = "VAR"
+    ),
+    Housing = RMSE
+  ) %>%
+   dplyr::select(-RMSE)
+
+beijing_selected_models <- c(
+  "auto_ets_choice",
+  "four02_ARIMA",
+  "nnar_manual",
+  "var_2lag_all_covs",
+  "manual_picked_lr"
+)
+
+beijing_results_table <- all_part2_results |>
+  dplyr::filter(model %in% beijing_selected_models) |>
+  dplyr::select(model, RMSE) |>
+  mutate(
+    model = recode(
+      model,
+      "auto_ets_choice" = "ETS",
+      "four02_ARIMA" = "ARIMA",
+      "nnar_manual" = "NNAR",
+      "var_2lag_all_covs" = "VAR",
+      "manual_picked_lr" = "LaggedRegression"
+    ),
+    Beijing = RMSE
+  ) %>%
+   dplyr::select(-RMSE)
+
+combined_table <- dplyr::left_join(
+  beijing_results_table ,
+  housing_results_table ,
+  by = "model"
+)
+
+combined_table |>
+  gt() |>
+   tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_body(
+      columns = Housing,
+      rows = Housing == min(Housing, na.rm = TRUE)
+    )
+  ) |>
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_body(
+      columns = Beijing,
+      rows = Beijing == min(Beijing, na.rm = TRUE)
+    )
+  )
+```
+
+<div id="bewvgrktlo" style="padding-left:0px;padding-right:0px;padding-top:10px;padding-bottom:10px;overflow-x:auto;overflow-y:auto;width:auto;height:auto;">
+<style>#bewvgrktlo table {
+  font-family: system-ui, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji';
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+&#10;#bewvgrktlo thead, #bewvgrktlo tbody, #bewvgrktlo tfoot, #bewvgrktlo tr, #bewvgrktlo td, #bewvgrktlo th {
+  border-style: none;
+}
+&#10;#bewvgrktlo p {
+  margin: 0;
+  padding: 0;
+}
+&#10;#bewvgrktlo .gt_table {
+  display: table;
+  border-collapse: collapse;
+  line-height: normal;
+  margin-left: auto;
+  margin-right: auto;
+  color: #333333;
+  font-size: 16px;
+  font-weight: normal;
+  font-style: normal;
+  background-color: #FFFFFF;
+  width: auto;
+  border-top-style: solid;
+  border-top-width: 2px;
+  border-top-color: #A8A8A8;
+  border-right-style: none;
+  border-right-width: 2px;
+  border-right-color: #D3D3D3;
+  border-bottom-style: solid;
+  border-bottom-width: 2px;
+  border-bottom-color: #A8A8A8;
+  border-left-style: none;
+  border-left-width: 2px;
+  border-left-color: #D3D3D3;
+}
+&#10;#bewvgrktlo .gt_caption {
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+&#10;#bewvgrktlo .gt_title {
+  color: #333333;
+  font-size: 125%;
+  font-weight: initial;
+  padding-top: 4px;
+  padding-bottom: 4px;
+  padding-left: 5px;
+  padding-right: 5px;
+  border-bottom-color: #FFFFFF;
+  border-bottom-width: 0;
+}
+&#10;#bewvgrktlo .gt_subtitle {
+  color: #333333;
+  font-size: 85%;
+  font-weight: initial;
+  padding-top: 3px;
+  padding-bottom: 5px;
+  padding-left: 5px;
+  padding-right: 5px;
+  border-top-color: #FFFFFF;
+  border-top-width: 0;
+}
+&#10;#bewvgrktlo .gt_heading {
+  background-color: #FFFFFF;
+  text-align: center;
+  border-bottom-color: #FFFFFF;
+  border-left-style: none;
+  border-left-width: 1px;
+  border-left-color: #D3D3D3;
+  border-right-style: none;
+  border-right-width: 1px;
+  border-right-color: #D3D3D3;
+}
+&#10;#bewvgrktlo .gt_bottom_border {
+  border-bottom-style: solid;
+  border-bottom-width: 2px;
+  border-bottom-color: #D3D3D3;
+}
+&#10;#bewvgrktlo .gt_col_headings {
+  border-top-style: solid;
+  border-top-width: 2px;
+  border-top-color: #D3D3D3;
+  border-bottom-style: solid;
+  border-bottom-width: 2px;
+  border-bottom-color: #D3D3D3;
+  border-left-style: none;
+  border-left-width: 1px;
+  border-left-color: #D3D3D3;
+  border-right-style: none;
+  border-right-width: 1px;
+  border-right-color: #D3D3D3;
+}
+&#10;#bewvgrktlo .gt_col_heading {
+  color: #333333;
+  background-color: #FFFFFF;
+  font-size: 100%;
+  font-weight: normal;
+  text-transform: inherit;
+  border-left-style: none;
+  border-left-width: 1px;
+  border-left-color: #D3D3D3;
+  border-right-style: none;
+  border-right-width: 1px;
+  border-right-color: #D3D3D3;
+  vertical-align: bottom;
+  padding-top: 5px;
+  padding-bottom: 6px;
+  padding-left: 5px;
+  padding-right: 5px;
+  overflow-x: hidden;
+}
+&#10;#bewvgrktlo .gt_column_spanner_outer {
+  color: #333333;
+  background-color: #FFFFFF;
+  font-size: 100%;
+  font-weight: normal;
+  text-transform: inherit;
+  padding-top: 0;
+  padding-bottom: 0;
+  padding-left: 4px;
+  padding-right: 4px;
+}
+&#10;#bewvgrktlo .gt_column_spanner_outer:first-child {
+  padding-left: 0;
+}
+&#10;#bewvgrktlo .gt_column_spanner_outer:last-child {
+  padding-right: 0;
+}
+&#10;#bewvgrktlo .gt_column_spanner {
+  border-bottom-style: solid;
+  border-bottom-width: 2px;
+  border-bottom-color: #D3D3D3;
+  vertical-align: bottom;
+  padding-top: 5px;
+  padding-bottom: 5px;
+  overflow-x: hidden;
+  display: inline-block;
+  width: 100%;
+}
+&#10;#bewvgrktlo .gt_spanner_row {
+  border-bottom-style: hidden;
+}
+&#10;#bewvgrktlo .gt_group_heading {
+  padding-top: 8px;
+  padding-bottom: 8px;
+  padding-left: 5px;
+  padding-right: 5px;
+  color: #333333;
+  background-color: #FFFFFF;
+  font-size: 100%;
+  font-weight: initial;
+  text-transform: inherit;
+  border-top-style: solid;
+  border-top-width: 2px;
+  border-top-color: #D3D3D3;
+  border-bottom-style: solid;
+  border-bottom-width: 2px;
+  border-bottom-color: #D3D3D3;
+  border-left-style: none;
+  border-left-width: 1px;
+  border-left-color: #D3D3D3;
+  border-right-style: none;
+  border-right-width: 1px;
+  border-right-color: #D3D3D3;
+  vertical-align: middle;
+  text-align: left;
+}
+&#10;#bewvgrktlo .gt_empty_group_heading {
+  padding: 0.5px;
+  color: #333333;
+  background-color: #FFFFFF;
+  font-size: 100%;
+  font-weight: initial;
+  border-top-style: solid;
+  border-top-width: 2px;
+  border-top-color: #D3D3D3;
+  border-bottom-style: solid;
+  border-bottom-width: 2px;
+  border-bottom-color: #D3D3D3;
+  vertical-align: middle;
+}
+&#10;#bewvgrktlo .gt_from_md > :first-child {
+  margin-top: 0;
+}
+&#10;#bewvgrktlo .gt_from_md > :last-child {
+  margin-bottom: 0;
+}
+&#10;#bewvgrktlo .gt_row {
+  padding-top: 8px;
+  padding-bottom: 8px;
+  padding-left: 5px;
+  padding-right: 5px;
+  margin: 10px;
+  border-top-style: solid;
+  border-top-width: 1px;
+  border-top-color: #D3D3D3;
+  border-left-style: none;
+  border-left-width: 1px;
+  border-left-color: #D3D3D3;
+  border-right-style: none;
+  border-right-width: 1px;
+  border-right-color: #D3D3D3;
+  vertical-align: middle;
+  overflow-x: hidden;
+}
+&#10;#bewvgrktlo .gt_stub {
+  color: #333333;
+  background-color: #FFFFFF;
+  font-size: 100%;
+  font-weight: initial;
+  text-transform: inherit;
+  border-right-style: solid;
+  border-right-width: 2px;
+  border-right-color: #D3D3D3;
+  padding-left: 5px;
+  padding-right: 5px;
+}
+&#10;#bewvgrktlo .gt_stub_row_group {
+  color: #333333;
+  background-color: #FFFFFF;
+  font-size: 100%;
+  font-weight: initial;
+  text-transform: inherit;
+  border-right-style: solid;
+  border-right-width: 2px;
+  border-right-color: #D3D3D3;
+  padding-left: 5px;
+  padding-right: 5px;
+  vertical-align: top;
+}
+&#10;#bewvgrktlo .gt_row_group_first td {
+  border-top-width: 2px;
+}
+&#10;#bewvgrktlo .gt_row_group_first th {
+  border-top-width: 2px;
+}
+&#10;#bewvgrktlo .gt_summary_row {
+  color: #333333;
+  background-color: #FFFFFF;
+  text-transform: inherit;
+  padding-top: 8px;
+  padding-bottom: 8px;
+  padding-left: 5px;
+  padding-right: 5px;
+}
+&#10;#bewvgrktlo .gt_first_summary_row {
+  border-top-style: solid;
+  border-top-color: #D3D3D3;
+}
+&#10;#bewvgrktlo .gt_first_summary_row.thick {
+  border-top-width: 2px;
+}
+&#10;#bewvgrktlo .gt_last_summary_row {
+  padding-top: 8px;
+  padding-bottom: 8px;
+  padding-left: 5px;
+  padding-right: 5px;
+  border-bottom-style: solid;
+  border-bottom-width: 2px;
+  border-bottom-color: #D3D3D3;
+}
+&#10;#bewvgrktlo .gt_grand_summary_row {
+  color: #333333;
+  background-color: #FFFFFF;
+  text-transform: inherit;
+  padding-top: 8px;
+  padding-bottom: 8px;
+  padding-left: 5px;
+  padding-right: 5px;
+}
+&#10;#bewvgrktlo .gt_first_grand_summary_row {
+  padding-top: 8px;
+  padding-bottom: 8px;
+  padding-left: 5px;
+  padding-right: 5px;
+  border-top-style: double;
+  border-top-width: 6px;
+  border-top-color: #D3D3D3;
+}
+&#10;#bewvgrktlo .gt_last_grand_summary_row_top {
+  padding-top: 8px;
+  padding-bottom: 8px;
+  padding-left: 5px;
+  padding-right: 5px;
+  border-bottom-style: double;
+  border-bottom-width: 6px;
+  border-bottom-color: #D3D3D3;
+}
+&#10;#bewvgrktlo .gt_striped {
+  background-color: rgba(128, 128, 128, 0.05);
+}
+&#10;#bewvgrktlo .gt_table_body {
+  border-top-style: solid;
+  border-top-width: 2px;
+  border-top-color: #D3D3D3;
+  border-bottom-style: solid;
+  border-bottom-width: 2px;
+  border-bottom-color: #D3D3D3;
+}
+&#10;#bewvgrktlo .gt_footnotes {
+  color: #333333;
+  background-color: #FFFFFF;
+  border-bottom-style: none;
+  border-bottom-width: 2px;
+  border-bottom-color: #D3D3D3;
+  border-left-style: none;
+  border-left-width: 2px;
+  border-left-color: #D3D3D3;
+  border-right-style: none;
+  border-right-width: 2px;
+  border-right-color: #D3D3D3;
+}
+&#10;#bewvgrktlo .gt_footnote {
+  margin: 0px;
+  font-size: 90%;
+  padding-top: 4px;
+  padding-bottom: 4px;
+  padding-left: 5px;
+  padding-right: 5px;
+}
+&#10;#bewvgrktlo .gt_sourcenotes {
+  color: #333333;
+  background-color: #FFFFFF;
+  border-bottom-style: none;
+  border-bottom-width: 2px;
+  border-bottom-color: #D3D3D3;
+  border-left-style: none;
+  border-left-width: 2px;
+  border-left-color: #D3D3D3;
+  border-right-style: none;
+  border-right-width: 2px;
+  border-right-color: #D3D3D3;
+}
+&#10;#bewvgrktlo .gt_sourcenote {
+  font-size: 90%;
+  padding-top: 4px;
+  padding-bottom: 4px;
+  padding-left: 5px;
+  padding-right: 5px;
+}
+&#10;#bewvgrktlo .gt_left {
+  text-align: left;
+}
+&#10;#bewvgrktlo .gt_center {
+  text-align: center;
+}
+&#10;#bewvgrktlo .gt_right {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+&#10;#bewvgrktlo .gt_font_normal {
+  font-weight: normal;
+}
+&#10;#bewvgrktlo .gt_font_bold {
+  font-weight: bold;
+}
+&#10;#bewvgrktlo .gt_font_italic {
+  font-style: italic;
+}
+&#10;#bewvgrktlo .gt_super {
+  font-size: 65%;
+}
+&#10;#bewvgrktlo .gt_footnote_marks {
+  font-size: 75%;
+  vertical-align: 0.4em;
+  position: initial;
+}
+&#10;#bewvgrktlo .gt_asterisk {
+  font-size: 100%;
+  vertical-align: 0;
+}
+&#10;#bewvgrktlo .gt_indent_1 {
+  text-indent: 5px;
+}
+&#10;#bewvgrktlo .gt_indent_2 {
+  text-indent: 10px;
+}
+&#10;#bewvgrktlo .gt_indent_3 {
+  text-indent: 15px;
+}
+&#10;#bewvgrktlo .gt_indent_4 {
+  text-indent: 20px;
+}
+&#10;#bewvgrktlo .gt_indent_5 {
+  text-indent: 25px;
+}
+&#10;#bewvgrktlo .katex-display {
+  display: inline-flex !important;
+  margin-bottom: 0.75em !important;
+}
+&#10;#bewvgrktlo div.Reactable > div.rt-table > div.rt-thead > div.rt-tr.rt-tr-group-header > div.rt-th-group:after {
+  height: 0px !important;
+}
+</style>
+<table class="gt_table" data-quarto-disable-processing="false" data-quarto-bootstrap="false">
+  <thead>
+    <tr class="gt_col_headings">
+      <th class="gt_col_heading gt_columns_bottom_border gt_left" rowspan="1" colspan="1" scope="col" id="model">model</th>
+      <th class="gt_col_heading gt_columns_bottom_border gt_right" rowspan="1" colspan="1" scope="col" id="Beijing">Beijing</th>
+      <th class="gt_col_heading gt_columns_bottom_border gt_right" rowspan="1" colspan="1" scope="col" id="Housing">Housing</th>
+    </tr>
+  </thead>
+  <tbody class="gt_table_body">
+    <tr><td headers="model" class="gt_row gt_left">ETS</td>
+<td headers="Beijing" class="gt_row gt_right">0.8422123</td>
+<td headers="Housing" class="gt_row gt_right" style="font-weight: bold;">0.07475261</td></tr>
+    <tr><td headers="model" class="gt_row gt_left">ARIMA</td>
+<td headers="Beijing" class="gt_row gt_right">0.7171727</td>
+<td headers="Housing" class="gt_row gt_right">0.09672345</td></tr>
+    <tr><td headers="model" class="gt_row gt_left">NNAR</td>
+<td headers="Beijing" class="gt_row gt_right">0.6997427</td>
+<td headers="Housing" class="gt_row gt_right">0.09552969</td></tr>
+    <tr><td headers="model" class="gt_row gt_left">VAR</td>
+<td headers="Beijing" class="gt_row gt_right" style="font-weight: bold;">0.6967676</td>
+<td headers="Housing" class="gt_row gt_right">0.08795550</td></tr>
+    <tr><td headers="model" class="gt_row gt_left">LaggedRegression</td>
+<td headers="Beijing" class="gt_row gt_right">0.7752780</td>
+<td headers="Housing" class="gt_row gt_right">0.08963593</td></tr>
+  </tbody>
+  &#10;</table>
+</div>
+
+## Part 3b
+
+In general, the predictions about which model class would be best were reasonably accurate. For the housing data set, we had a smaller sample size, near linear behavior, and cyclical patterns in the series, which led me to believe the simple models such as ETS/ARIMA would do the best. The tuned ETS (which was the same as the baseline-selected ETS) performed very well, and while the tuned ARIMA performed poorly, the automatically selected ARIMA did well in terms of predicting on the test set. There were not any complex non-linear relationships or interactions between covariates that NNAR would provide benefit, so it made sense this model class performed poorly, as predicted. Since housing permits appeared a natural explanatory variable for housing starts, I was surprised lagged regression did not perform better than it did.
+
+In terms of the Beijing data, we had a much larger time series, more complex cyclical behavior that seasonality poorly accounted for, non-linear relationships between the variables, interactions between the variables, and a considerable amount of noise. Given these factors, NNAR performed well as expected. VAR also performed well, indicating including the own series’ and related covariates’ past was beneficial. ETS performed poorly as predicted, since it could not account for the yearly seasonality in the data, even when performing ETS on the fourier errors. I was surprised ARIMA did well initially, once incorporating the fourier terms. However, it did extremely poorly in terms of predicting high periods of pollution. This indicates ARIMA is not a good choice for this data if that is the predictive goal, since it cannot model the more complex, irregular peaks well.
+
+## Part 3c
+
+For the housing data set, the biggest improvement came from manually tuning the VAR model to see which covariates should be included. Doing so improved the RMSE from 0.10 to 0.088. Improvements in NNAR (0.096 to 0.089) and lagged regression (0.096 to 0.09) also came from just trying different combinations of p/k or different combinations of lagged predictors. In general, attempting to account for seasonality by adding monthly regressors did not provide benefit in terms of predictive power. This seasonality was already well-accounted for in the baseline ETS model with additive seasonality (and log outcomes) and the seasonal ARIMA component. Tuning in terms of seasonality did not provide any additional benefit.
+
+For the Beijing data set, the biggest benefit came from adding the interaction between dew and wind to the lagged regression (RMSE improved from 0.775 to 0.711). This helped the simple model account for a complex non-linear effect of the explanatory variables. Incorporating covariate information into NNAR and adjusting p/P/k provided a small benefit over the constrained baseline NNAR (RMSE improved from 0.706 to 0.6997), but this was a minor improvement. If we compare the the unconstrained baseline NNAR, there was a much more dramatic improvement, since that model was very overfit. None of the other tuning made much of a difference. Manually tuning the ARIMA by adding the Fourier terms led to a tiny improvement in RMSE from 0.702 to 0.699, indicating that explaining the seasonality in a deterministic way provided some minor benefit for the ARIMA model. Changes in VAR and ETS through attempting to add other variables or trying to use ETS errors fitted on residuals of fouirer regression were negligible.
+
+## Part 3d
+
+For a small, monthly data set, where the goal is one-step ahead prediction, I would recommend exponential smoothing or SARIMA. These can account for the monthly seasonality well and are good choices if there is not a lot of data. If there are other covariates that might help explain changes in the main series of interest, using VAR might also be a good idea given the relatively small data size. When comparing different model classes with this small data set, is it important to understand that the specific training/test windows can have a drastic impact on how the models perform.
+
+For a larger, daily data set, I would first recommend NNAR. This can well explain non-linear patterns with other covariates and the series past observations. However, it is important to manually tune this model or incorporate some constraints to avoid over fitting. Other good choices include VAR, which performed very well for the Beijing data, and can model several outcomes jointly. If several strong predictors are included, this model class can work well. A third choice could be ARIMA, depending on the purpose of the prediction. If the goal is to model extreme values in the data, such as high levels of pollution, ARIMA can easily struggle. If we want a model that can make more moderate predictions and model seasonality well, ARIMA can be a good choice. Attempting to model seasonality in several ways, such as a seasonal component or Fourier terms as a regressor, can also help improve model performance.
+
+<sup>Created on 2026-11-02 with [reprex v2.1.1](https://reprex.tidyverse.org)</sup>
