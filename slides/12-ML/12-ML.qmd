@@ -1,0 +1,1651 @@
+---
+title: "2026 Time Series"
+author: "12 - Machine Learning for Forecasting"
+format:
+  revealjs:
+    slide-number: true
+    smaller: false
+    scrollable: true
+    toc: true
+    toc-depth: 1
+    mermaid:
+      theme: neutral
+execute:
+  echo: true
+  warning: false
+  message: false
+editor: source
+editor_options:
+  chunk_output_type: console
+---
+
+```{r, echo=FALSE}
+library(fpp3)
+library(ranger)
+library(xgboost)
+library(rpart)
+theme_set(theme_minimal(base_size = 14))
+set.seed(2026)
+rmse <- function(actual, pred) sqrt(mean((actual - pred)^2))
+```
+
+# How to use this deck
+
+## Two parts
+
+**Part 1: The big picture (plain language).**
+What each idea *is*, why it exists, and how it connects to the models you already know. Almost no code or math.
+
+**Part 2: Technical depth**
+Same concepts as part 1 but with more technical details
+
+# Part 1: The big picture
+
+## Where we are
+
+We have used three different ways for a model to "look at history":
+
+| Way of seeing history | Examples |
+|---|---|
+| A **fixed window** of recent values | AR / ARIMA, NNAR |
+| A **running memory** that gets updated | RNN, LSTM |
+| **Selective lookback** that chooses which past moments matter | Attention, Transformers |
+
+Here we add three families on top of that:
+
+1. **Tree-based models** (random forests, gradient boosting) that learn from a *fixed window of lags* plus any other features you give them.
+2. **Global models** that learn from *many series at once*.
+3. **Attention**, the idea behind Transformers.
+
+## Key Idea: forecasting as a table
+
+A normal machine-learning model wants a **table**: one row per example, columns of inputs, and one column to predict.
+
+A time series is not a table. But we can *make* it one:
+
+| Row (day) | Demand yesterday | Demand 7 days ago | Temp yesterday | Day of week | **Demand today (target)** |
+|---|---|---|---|---|---|
+| Mon | 210 | 205 | 25 | Mon | **224** |
+| Tue | 224 | 211 | 29 | Tue | **231** |
+| ... | ... | ... | ... | ... | ... |
+
+- Each row says: "given what we knew *before* today, what happened today?"
+- Once it is a table, **any** regression method can be used: linear regression, trees, neural nets.
+- This is the same "lag" idea as an AR model, just not limited to straight lines.
+
+## What is a decision tree?
+
+```{mermaid}
+%%| echo: false
+%%{init: {'flowchart': {'htmlLabels': false}, 'themeVariables': {'fontFamily': 'Helvetica, Arial, sans-serif'}}}%%
+flowchart TD
+    A{Is yesterday's demand above 230?} -->|Yes| B{Is today a weekend?}
+    A -->|No| C{Was it hot yesterday?}
+    B -->|Yes| D[Predict 225]
+    B -->|No| E[Predict 250]
+    C -->|Yes| F[Predict 238]
+    C -->|No| G[Predict 205]
+```
+
+- The computer *learns* which questions to ask, and where to put the cut-offs, from past data.
+- The final guess is simply the **average** of the past days that ended up in that box.
+- A tree can capture curves, thresholds and "it depends" interactions that a straight-line model cannot.
+
+## Why one tree is not enough
+
+A single tree is easy to understand but jumpy: change the data a little and the questions change a lot.
+
+Two fixes, both in plain language:
+
+**Random forest: a committee.**
+Train hundreds of trees, each on a slightly different random sample of the data and each allowed to ask only a random subset of questions. Then **average** them. Individual trees make different mistakes, and averaging cancels many of them out.
+
+**Gradient boosting: a team of apprentices.**
+Train a small tree. Look at what it got wrong. Train the next small tree **to fix those mistakes**. Repeat hundreds of times. The final forecast is the sum of everyone's corrections.
+
+## Forest vs boosting, in one picture
+
+```{mermaid}
+%%| echo: false
+%%{init: {'flowchart': {'htmlLabels': false}, 'themeVariables': {'fontFamily': 'Helvetica, Arial, sans-serif'}}}%%
+flowchart TB
+    subgraph Forest[Random forest: trees side by side]
+    direction LR
+    T1[Tree 1] --> AV[Average]
+    T2[Tree 2] --> AV
+    T3[Tree 3] --> AV
+    end
+    subgraph Boost[Boosting: trees in sequence]
+    direction LR
+    B1[Tree 1] -->|its mistakes| B2[Tree 2]
+    B2 -->|remaining mistakes| B3[Tree 3]
+    B3 --> SUM[Add corrections]
+    end
+```
+
+- Forest: independent, then average. Reduces **variance**.
+- Boosting: dependent, then add. Reduces **bias** step by step, so it needs more care not to overfit.
+
+## What trees cannot do
+
+A tree predicts by **averaging past values it has already seen**. So it can never predict a number outside the range of its training data, and it cannot keep following a trend.
+
+If a series grows steadily, a tree trained on the early years will predict "about the largest thing I have seen" forever.
+
+- ARIMA and ETS can continue a trend.
+- Trees need help: model *changes* instead of *levels*, or combine them with a simple trend model.
+- We will see this on real data in Part 2.
+
+## What is a "global" model?
+
+**Local model:** one model per series. 300 stores means 300 models, each learning only from its own short history.
+
+**Global model:** *one* model trained on **all** the series together.
+
+- Idea: many series share patterns (weekends, holidays, seasonality, recovery after a promotion).
+- A short or noisy series can borrow strength from similar series.
+- Series-specific information goes in as features (store type, region, the series' average size).
+- This is the main reason machine learning has done well in large forecasting competitions.
+
+## What is attention?
+
+Imagine forecasting next week's sales. Not all past weeks matter equally: last week, the same week last year, and the last holiday matter more than a random Tuesday.
+
+- An AR model gives each lag a **fixed** weight, always.
+- An RNN/LSTM squeezes the whole past into one memory.
+- **Attention** looks back over all past moments and assigns each a weight **that depends on the situation right now**, then takes the weighted average.
+
+Think of searching a library: your question (the *query*) is compared with every book's label (the *key*), and you read mostly the books that match best (the *values*).
+
+## The map
+
+| Idea | One-line summary | Use it when |
+|---|---|---|
+| Lag features + trees | Turn the series into a table, learn rules | Many predictors, calendar effects, nonlinearity, moderate data |
+| Random forest | Average many different trees | Robust default, little tuning |
+| Gradient boosting | Trees that fix each other's mistakes | Usually the most accurate tabular method; needs tuning |
+| Global model | One model for many series | Many related, short or noisy series |
+| Attention / Transformers | Learned, situation-dependent lookback | Lots of data, long histories, many series |
+| Classical (ETS / ARIMA) | A few parameters, built-in structure | One short series, trend extrapolation, need intervals |
+
+The rest of the deck is about telling them apart.
+
+## Self-check: Part 1
+
+1. How do you turn a time series into a table, and what must be true of every input in a row?
+2. What does a tree predict in a leaf, and why does that limit it?
+3. Forest vs boosting: which reduces variance, which builds on mistakes?
+4. What is the difference between a local and a global model?
+5. How is attention different from the fixed lag weights of an AR model?
+
+## Answers: Part 1
+
+1. Each row has the target (today's value) and inputs like lags, rolling averages and calendar facts. Every input must be **known at the moment of forecasting**: nothing from after the time you are predicting.
+2. The average of the training targets in that leaf. So predictions stay within the range of past values and cannot follow a trend beyond what was seen.
+3. A forest averages independent trees (reducing variance). Boosting adds trees one after another, each correcting the previous ones' mistakes.
+4. A local model is fit separately to each series. A global model is fit once on many series, with series-specific features.
+5. AR uses the same weights every time. Attention computes weights from the current context, so which past moments matter changes with the situation.
+
+# Part 2: Technical depth
+
+# 2.1 Setting up the problem
+
+## Forecasting as supervised learning
+
+We want $\hat y_{t+h} = f(\mathbf{x}_t)$, where $\mathbf{x}_t$ is information available at time $t$:
+
+$$
+\mathbf{x}_t = (y_t, y_{t-1}, \dots, y_{t-p+1},\; \text{rolling statistics},\; \text{calendar features},\; \text{other series}).
+$$
+
+- Each time $t$ gives one **training example** $(\mathbf{x}_t, y_{t+h})$.
+- With $f$ linear in $y_t,\dots,y_{t-p+1}$ this is an AR($p$) model fit by least squares.
+- With $f$ a tree ensemble, $f$ can be nonlinear and can include interactions.
+- No probability model for the errors is assumed, so **no automatic prediction intervals** (Section 2.9).
+
+You now choose $p$, the features, the horizon strategy, and tuning parameters yourself.
+
+## Known vs unknown inputs
+
+At forecast time, features fall into three groups:
+
+| Type | Example | Allowed at horizon $h$? |
+|---|---|---|
+| **Past values** | $y_{t-1}$, rolling mean of past days | Yes, if computed from data up to the forecast origin |
+| **Known-in-advance** | Day of week, month, holiday, planned promotion | Yes, even for dates in the future |
+| **Unknown future** | Tomorrow's temperature, tomorrow's sales of another product | **No**, unless you use a *forecast* of it |
+
+Using tomorrow's actual temperature in an experiment overstates real-world accuracy. Our electricity example uses only *lagged* temperature for that reason.
+
+## The data we will use
+
+Daily electricity demand for Victoria, Australia (GWh), with maximum temperature and a holiday flag. The same data as in 11A.
+
+```{r}
+el <- vic_elec |>
+  index_by(Date) |>
+  summarise(Demand = sum(Demand) / 1000,
+            Temp = max(Temperature),
+            Holiday = as.numeric(any(Holiday))) |>
+  as_tibble()
+
+c(days = nrow(el), first = format(min(el$Date)), last = format(max(el$Date)))
+```
+
+- Train on 2012-2013, test on 2014, one step ahead, parameters fixed after training (the same design as 11A).
+
+# 2.2 Feature engineering
+
+## Building lag features
+
+```{r}
+feat <- el |>
+  mutate(
+    lag1 = lag(Demand, 1), lag2 = lag(Demand, 2), lag3 = lag(Demand, 3),
+    lag7 = lag(Demand, 7), lag14 = lag(Demand, 14),
+    roll7 = zoo::rollmeanr(lag(Demand, 1), 7, fill = NA),  # mean of the 7 days BEFORE today
+    temp_l1 = lag(Temp, 1), temp_l2 = lag(Temp, 2),
+    dow = lubridate::wday(Date), month = lubridate::month(Date)) |>
+  filter(!is.na(lag14), !is.na(roll7))
+
+train_end <- as.Date("2013-12-31")
+tr <- feat |> filter(Date <= train_end)
+te <- feat |> filter(Date >  train_end)
+xs <- c("lag1", "lag2", "lag3", "lag7", "lag14", "roll7",
+        "temp_l1", "temp_l2", "dow", "month", "Holiday")
+c(train = nrow(tr), test = nrow(te), features = length(xs))
+```
+
+- `lag7` and `lag14` capture the weekly pattern; `roll7` smooths recent level.
+- `lag()` shifts values *forward* in time, so each row only sees the past. `Holiday` and `dow` describe the day being forecast and are known in advance.
+
+## Common feature ideas
+
+| Feature family | Examples | Why |
+|---|---|---|
+| Lags | $y_{t-1},\ y_{t-7},\ y_{t-365}$ | Autocorrelation, seasonality |
+| Rolling statistics | Mean, SD, min, max of the past $k$ values | Level and volatility |
+| Differences / growth | $y_{t-1}-y_{t-2}$, percent change | Trend direction |
+| Calendar | Day of week, month, holiday, days to holiday | Known seasonality |
+| Fourier terms | $\sin(2\pi kt/m),\ \cos(2\pi kt/m)$ | Smooth seasonality with few columns |
+| Other series | Lagged temperature, price, promotions | Drivers |
+
+- Trees do **not** need features scaled or transformed monotonically.
+- They *do* need you to supply the information: a tree cannot compute "demand 7 days ago" by itself.
+
+## Data leakage
+
+**Leakage** is any feature that contains information from the future of the row it describes. It makes experiments look great and real forecasts fail.
+
+A typical mistake: a **centered** rolling mean, which averages days before *and after* today.
+
+```{r}
+leak <- el |>
+  mutate(lag1 = lag(Demand, 1), lag7 = lag(Demand, 7), dow = lubridate::wday(Date),
+         cent7 = zoo::rollmean(Demand, 7, fill = NA, align = "center")) |>
+  filter(!is.na(lag7), !is.na(cent7))
+trL <- leak |> filter(Date <= train_end); teL <- leak |> filter(Date > train_end)
+
+fit_rmse <- function(cols) {
+  m <- ranger(Demand ~ ., data = trL[, c("Demand", cols)], num.trees = 300, seed = 1)
+  rmse(teL$Demand, predict(m, teL[, cols])$predictions)
+}
+c(lagged_only = fit_rmse(c("lag1", "lag7", "dow", "Holiday")),
+  with_centered_mean = fit_rmse(c("lag1", "lag7", "dow", "Holiday", "cent7")))
+```
+
+The second number is better because the model is peeking at days after today. In real use that column would not exist.
+
+## A leakage checklist
+
+- Every rolling or lagged feature must use only rows **strictly before** the target date (use `lag()` first, then roll).
+- Never compute scaling constants (means, SDs) or target-based encodings on the **whole** dataset; compute them on the training period only.
+- Never shuffle rows before splitting (Section 2.6).
+- For global models, cut **all** series at the same calendar date (Section 2.11).
+- If results look too good, suspect leakage first.
+
+# 2.3 Regression trees
+
+## How a regression tree is built
+
+Goal: split the feature space into regions $R_1,\dots,R_M$ and predict a constant $c_m$ in each:
+
+$$
+\hat f(\mathbf{x}) = \sum_{m=1}^{M} c_m \,\mathbf{1}\{\mathbf{x}\in R_m\},
+\qquad c_m = \text{average of } y_i \text{ with } \mathbf{x}_i \in R_m.
+$$
+
+**Greedy recursive splitting.** At each node, try every feature $j$ and every threshold $s$, split into
+
+$$
+R_L(j,s)=\{\mathbf{x}: x_j \le s\}, \quad R_R(j,s)=\{\mathbf{x}: x_j > s\},
+$$
+
+and choose the pair that minimizes the total squared error
+
+$$
+\sum_{i\in R_L}(y_i-c_L)^2+\sum_{i\in R_R}(y_i-c_R)^2.
+$$
+
+Then repeat inside each child, until a stopping rule (maximum depth, minimum observations in a leaf).
+
+## A small tree on the electricity data: the code
+
+```{r}
+#| output: false
+small_tree <- rpart(Demand ~ temp_l1 + dow + Holiday + lag1, data = tr,
+                    control = rpart.control(maxdepth = 3, cp = 0.001))
+```
+
+Four features, a maximum depth of 3.
+
+## A small tree on the electricity data: the tree
+
+```{r}
+#| echo: false
+#| fig-height: 5
+plot(small_tree, margin = 0.1, uniform = TRUE)
+text(small_tree, use.n = TRUE, cex = 0.8)
+```
+
+- Each box is a question; each leaf shows the average demand (and the number of days) that landed there.
+- `lag1` (yesterday's demand) usually enters first: the biggest reduction in squared error.
+
+## Key properties of a tree
+
+- **Piecewise constant:** the fitted function is a staircase. It can approximate any shape, but with enough data and splits.
+- **Handles interactions automatically:** a split inside a split means "it depends on".
+- **Invariant to monotone transformations** of a feature (only the order of values matters).
+- **High variance:** small changes in data can change the first split and everything below it.
+- **Depth controls complexity.** Deep trees fit noise; shallow trees underfit.
+- **Bounded predictions:** a leaf value is an average of training targets, so $\min y_{\text{train}} \le \hat f \le \max y_{\text{train}}$. This is the root of the extrapolation problem (Section 2.8).
+
+# 2.4 Random forests
+
+## Bagging and the forest
+
+**Bagging** (bootstrap aggregation): draw $B$ bootstrap samples of the rows, fit a deep tree to each, average the predictions:
+
+$$
+\hat f_{\text{bag}}(\mathbf{x}) = \frac1B \sum_{b=1}^{B} \hat f_b(\mathbf{x}).
+$$
+
+**Random forest** adds one more idea: at each split, only a random subset of `mtry` features is considered. This *decorrelates* the trees.
+
+If each tree has variance $\sigma^2$ and trees have pairwise correlation $\rho$:
+
+$$
+\operatorname{Var}\Big(\frac1B\sum_b \hat f_b\Big) = \rho\,\sigma^2 + \frac{1-\rho}{B}\,\sigma^2 .
+$$
+
+- More trees ($B\uparrow$) shrinks the second term only.
+- Smaller `mtry` lowers $\rho$ (less correlated trees) but each tree is individually a bit worse.
+- A forest does not overfit by adding more trees. How complex each tree is (its depth and leaf size) is covered in the next slides.
+
+## Why more trees help: the second term
+
+$$
+\operatorname{Var}\Big(\frac1B\sum_b \hat f_b\Big) = \rho\,\sigma^2 + \frac{1-\rho}{B}\,\sigma^2
+$$
+
+- The **second term** is the part of each tree's noise that is unique to that tree. Averaging $B$ trees cancels it, at rate $1/B$.
+- The **first term** is noise that all trees share (same data, same strong features). Averaging cannot cancel it.
+- So adding trees helps quickly at first, then stops helping once the second term is small compared with $\rho\sigma^2$.
+
+## Variance of the average as trees are added
+
+```{r}
+#| echo: false
+#| fig-height: 4.2
+expand.grid(B = 1:500, rho = c(0.1, 0.3, 0.6)) |>
+  mutate(variance = rho + (1 - rho) / B, rho = factor(rho)) |>
+  ggplot(aes(B, variance, colour = rho)) + geom_line(linewidth = 1) +
+  geom_hline(aes(yintercept = as.numeric(as.character(rho)), colour = rho),
+             linetype = "dashed", linewidth = 0.8) +
+  scale_x_log10() +
+  labs(x = "Number of trees B (log scale)", y = "Variance of the average",
+       colour = expression(rho))
+```
+
+Here $\sigma^2 = 1$. Each dashed line is the floor $\rho\sigma^2$ for the curve of the same color: the curve approaches it as $B$ grows but never goes below it. Lower correlation means a lower floor.
+
+## Why a smaller `mtry` helps, and what it costs
+
+At every split, a tree may only look at `mtry` randomly chosen features.
+
+- **Benefit:** without the restriction, every tree opens with `lag1` (the strongest feature) and the trees come out nearly identical, so $\rho$ is high. Hiding some features forces trees to find different splits, so $\rho$ falls and the floor $\rho\sigma^2$ drops.
+- **Cost:** a tree that is not allowed to see `lag1` at a split must use a weaker feature there. With a very small `mtry`, each tree is individually worse.
+- The best `mtry` balances the two. We try it on electricity data, training through June 2013 and validating on July to December 2013 (the test year is not touched).
+
+```{r}
+fv_trn <- tr |> filter(Date <  as.Date("2013-07-01"))
+fv_val <- tr |> filter(Date >= as.Date("2013-07-01"))
+
+rf_fit <- function(...) ranger(Demand ~ ., data = fv_trn[, c("Demand", xs)], seed = 1, ...)
+rf_err <- function(m) c(train = rmse(fv_trn$Demand, predict(m, fv_trn[, xs])$predictions),
+                        validation = rmse(fv_val$Demand, predict(m, fv_val[, xs])$predictions))
+
+sapply(c(1, 2, 4, 8, 11), function(k) round(rf_err(rf_fit(num.trees = 300, mtry = k)), 2)) |>
+  `colnames<-`(paste0("mtry=", c(1, 2, 4, 8, 11)))
+```
+
+- With `mtry = 1` each tree is forced to split on one random feature at a time, and the forest is clearly worse.
+- Past a few features there is little change: with 11 features, the extra choice at each split adds little here.
+
+## What exactly are $\sigma^2$ and $\rho$?
+
+Both are about the prediction at **one fixed input** $\mathbf{x}$ (say, a particular day), over the randomness in how the forest is built. They are not the variance or correlation of the demand data.
+
+- **Randomness comes from two places:** which training data we happened to have, and the random choices inside the forest (bootstrap rows, `mtry` features).
+- $\sigma^2$: how much one tree's prediction at $\mathbf{x}$ would vary if we rebuilt it from scratch.
+- $\rho$: how strongly two different trees' predictions at $\mathbf{x}$ move together when we rebuild. Trees that read the same training data tend to be wrong in the same direction, which gives a positive $\rho$.
+- Both are averaged over many points $\mathbf{x}$ in practice.
+
+A common picture is that small `mtry` makes $\rho$ about 0 and large `mtry` makes $\rho$ about 1. That is not quite right. Trees in a forest are always built from the same data, so $\rho$ stays above 0. Reducing `mtry` lowers it. It does not reach 0, and a forest's $\rho$ is usually far from 1.
+
+## Estimating $\sigma^2$ and $\rho$ in practice
+
+You cannot read $\sigma^2$ and $\rho$ off a single fitted forest, because that forest has only one training set. The idea is to rebuild the forest on many resampled training sets:
+
+1. Draw $K$ resampled training sets (here, 80% of the rows).
+2. On each, fit a **1-tree** forest and a **$B$-tree** forest. Predict the validation days.
+3. $\hat\sigma^2$ = the variance of the 1-tree predictions across the $K$ fits (at each day), averaged over days.
+4. $V_B$ = the same quantity for the $B$-tree forest.
+5. Solve the formula $V_B = \rho\sigma^2 + (1-\rho)\sigma^2/B$ for $\rho$.
+
+```{r}
+set.seed(1)
+K <- 40; B <- 200
+est_rho <- function(mtry) {
+  P1 <- PB <- matrix(NA, nrow(fv_val), K)
+  for (k in 1:K) {
+    d <- fv_trn[sample(nrow(fv_trn), round(0.8 * nrow(fv_trn))), c("Demand", xs)]
+    P1[, k] <- predict(ranger(Demand ~ ., d, num.trees = 1, mtry = mtry, seed = k), fv_val[, xs])$predictions
+    PB[, k] <- predict(ranger(Demand ~ ., d, num.trees = B, mtry = mtry, seed = k), fv_val[, xs])$predictions
+  }
+  s2 <- mean(apply(P1, 1, var)); vB <- mean(apply(PB, 1, var))
+  rho <- (vB - s2 / B) / (s2 - s2 / B)
+  c(mtry = mtry, sigma2 = s2, var_forest = vB, rho = rho, floor = rho * s2)
+}
+round(t(sapply(c(1, 2, 4, 8, 11), est_rho)), 2)
+```
+
+## Reading the estimates
+
+For comparison, the variance of the demand itself over the validation months is `r round(var(fv_val$Demand))`.
+
+- **$\sigma^2$ is large.** One tree is very unstable (its variance is a large fraction of the variance of demand), and a forest of $B$ trees is far more stable.
+- **$\rho$ is small, but it is the floor $\rho\sigma^2$ that matters.** A small correlation times a large $\sigma^2$ is what stays after averaging many trees.
+- **As `mtry` increases, $\rho$ rises and $\sigma^2$ falls.** Trees that see more features are more alike (higher $\rho$), but each one is more stable (lower $\sigma^2$).
+- **Variance is only half of the story.** The floor is smallest at `mtry = 1`, yet that setting has the worst validation error on the previous slide. Hiding features lowers variance and raises each tree's bias.
+- The resampled sets share 80% of their rows and the rows are autocorrelated, so this understates the true variation from new data. Treat these as rough estimates of scale, not exact values.
+
+## What is the depth of a tree?
+
+**Depth** is the number of questions in a row from the top of the tree down to a leaf.
+
+The demand tree from earlier has depth 2: first "is yesterday's demand above 230?", then one more question, then a prediction.
+
+| Depth | Maximum number of leaves | What the tree looks like |
+|---|---|---|
+| 1 | 2 | One question. Two broad groups of days |
+| 2 | 4 | Two questions in a row |
+| 3 | 8 | Starts to separate special cases |
+| 5 | 32 | Many small groups |
+| 10 | 1,024 | Each group may hold only a handful of days |
+
+- Each extra level can double the number of leaves.
+- A **shallow** tree makes a few coarse groups and misses detail (underfit).
+- A **deep** tree makes many tiny groups, and starts fitting the noise in individual days (overfit).
+
+## What is leaf size?
+
+**Leaf size** is how many training days land in a leaf (a final box). The prediction for the leaf is the average of those days.
+
+- Leaf size 1: the box holds one day, the prediction is that day's value, and the training error is exactly zero. The tree has memorized the data.
+- Leaf size 50: the prediction averages 50 days, so one unusual day barely matters.
+- In `ranger`, `min.node.size` sets the size below which a box is not split further. In `rpart` the corresponding setting is `minbucket`.
+
+Depth and leaf size are two ways to limit the same thing: **how finely the tree chops up the data**. Deep trees and small leaves both give many small groups.
+
+## Overfitting a single tree: the code
+
+Fit single trees to the same training period and score them on the validation months, varying depth and leaf size.
+
+```{r}
+#| output: false
+tree_err <- function(depth = 30, leaf = 1) {
+  m <- rpart(Demand ~ ., data = fv_trn[, c("Demand", xs)],
+             control = rpart.control(maxdepth = depth, cp = 0, minsplit = 2, minbucket = leaf))
+  c(train = rmse(fv_trn$Demand, predict(m, fv_trn)),
+    validation = rmse(fv_val$Demand, predict(m, fv_val)))
+}
+by_depth <- sapply(c(1, 2, 3, 4, 6, 8, 12), function(d) tree_err(depth = d))
+by_leaf  <- sapply(c(1, 3, 10, 30, 60),     function(k) tree_err(leaf = k))
+
+p_single <- bind_rows(
+  tibble(setting = "Depth (leaf size 1)", value = c(1, 2, 3, 4, 6, 8, 12), as_tibble(t(by_depth))),
+  tibble(setting = "Minimum leaf size (no depth limit)", value = c(1, 3, 10, 30, 60), as_tibble(t(by_leaf)))) |>
+  pivot_longer(c(train, validation), names_to = "set", values_to = "rmse") |>
+  ggplot(aes(value, rmse, colour = set)) + geom_line() + geom_point() +
+  facet_wrap(~setting, scales = "free_x") +
+  labs(x = NULL, y = "RMSE", colour = NULL)
+```
+
+## Overfitting a single tree: the result
+
+```{r}
+#| echo: false
+#| fig-height: 4.2
+p_single
+```
+
+- Training error always falls as the tree gets more flexible. It reaches zero with leaf size 1.
+- Validation error is best at a moderate depth or leaf size, then rises: the tree is fitting noise.
+
+## Forests are more forgiving: the code
+
+Same experiment on a forest of 300 trees (`mtry = 4`). `max.depth` limits depth and `min.node.size` sets leaf size.
+
+```{r}
+#| output: false
+depths <- c(1, 2, 3, 5, 8, 12, 20); leaves <- c(1, 5, 20, 50, 100)
+f_depth <- sapply(depths, function(d) rf_err(rf_fit(num.trees = 300, mtry = 4, max.depth = d)))
+f_leaf  <- sapply(leaves, function(k) rf_err(rf_fit(num.trees = 300, mtry = 4, min.node.size = k)))
+
+p_forest <- bind_rows(
+  tibble(setting = "Maximum depth", value = depths, as_tibble(t(f_depth))),
+  tibble(setting = "Minimum leaf size", value = leaves, as_tibble(t(f_leaf)))) |>
+  pivot_longer(c(train, validation), names_to = "set", values_to = "rmse") |>
+  ggplot(aes(value, rmse, colour = set)) + geom_line() + geom_point() +
+  facet_wrap(~setting, scales = "free_x") +
+  labs(x = NULL, y = "RMSE", colour = NULL)
+```
+
+## Forests are more forgiving: the result
+
+```{r}
+#| echo: false
+#| fig-height: 4.2
+p_forest
+```
+
+- Validation error does **not** rise for deep trees or small leaves. Averaging many deep trees cancels most of the noise each one fits.
+- Forests go wrong by being **restricted too much**: very shallow trees or very large leaves underfit.
+
+## Forests are more forgiving: what to take
+
+- The training curve is in-sample, so use the validation curve.
+- A forest defaults to deep trees with small leaves, while a single tree needs depth or leaf size controlled.
+
+## Fitting a forest on the electricity data
+
+```{r}
+rf <- ranger(Demand ~ ., data = tr[, c("Demand", xs)],
+             num.trees = 500, mtry = 4, min.node.size = 5, seed = 1)
+rf_pred <- predict(rf, te[, xs])$predictions
+
+c(RMSE_test = rmse(te$Demand, rf_pred), OOB_RMSE_train = sqrt(rf$prediction.error))
+```
+
+- `num.trees`, `mtry`, `min.node.size` are the main settings. Defaults are usually decent.
+- **OOB (out-of-bag) error:** each tree leaves out about a third of rows; predicting those rows from the trees that did not see them gives a free error estimate.
+
+::: {.callout-warning}
+OOB estimates assume rows are exchangeable. In a lag table neighbouring rows share nearly identical features, so OOB is usually **optimistic** for time series. Above, the OOB RMSE (about 12) is well below the true out-of-sample RMSE on 2014 (about 16); part of that gap is that 2014 is simply a different year, but this is exactly the pattern to expect. Use time-ordered validation instead.
+:::
+
+# 2.5 Gradient boosting
+
+## The boosting idea, formally
+
+Build an additive model, one small tree at a time:
+
+$$
+F_0(\mathbf{x}) = \bar y, \qquad F_m(\mathbf{x}) = F_{m-1}(\mathbf{x}) + \eta\, h_m(\mathbf{x}),
+$$
+
+where $h_m$ is a small tree fit to the **negative gradient** of the loss at the current predictions, and $\eta\in(0,1]$ is the **learning rate** (shrinkage).
+
+For squared-error loss $L=\tfrac12(y-F)^2$, the negative gradient is just the **residual** $y-F_{m-1}(\mathbf{x})$. So:
+
+1. Compute residuals of the current model.
+2. Fit a small tree to the residuals.
+3. Add a fraction $\eta$ of it to the model.
+4. Repeat for $M$ rounds.
+
+Small $\eta$ with many rounds generally generalizes better than large $\eta$ with few rounds.
+
+## Boosting by hand: a minimal implementation
+
+```{r}
+boost_by_hand <- function(X, y, rounds = 200, eta = 0.1, depth = 2) {
+  F <- rep(mean(y), length(y)); trees <- vector("list", rounds)
+  d <- data.frame(X)
+  for (m in seq_len(rounds)) {
+    d$r <- y - F                                  # residuals = negative gradient
+    trees[[m]] <- rpart(r ~ ., data = d, control = rpart.control(maxdepth = depth, cp = 0))
+    F <- F + eta * predict(trees[[m]], d)         # take a small step
+  }
+  list(base = mean(y), trees = trees, eta = eta)
+}
+predict_by_hand <- function(fit, X) {
+  d <- data.frame(X)
+  fit$base + fit$eta * Reduce(`+`, lapply(fit$trees, predict, newdata = d))
+}
+bh <- boost_by_hand(tr[, xs], tr$Demand)
+rmse(te$Demand, predict_by_hand(bh, te[, xs]))
+```
+
+About fifteen lines is the whole algorithm, and its test RMSE is in the same range as the XGBoost fit on the next slides. XGBoost is a very fast, regularized, carefully engineered version of exactly this loop.
+
+## What XGBoost adds: the objective
+
+$$
+L = \sum_i \ell(y_i,\hat y_i) + \sum_k \Omega(f_k)
+$$
+
+- $\ell(y_i,\hat y_i)$ is the loss for one row, for example $(y_i-\hat y_i)^2$. The first sum is over rows.
+- $k$ indexes the **trees**: $\hat y_i = f_1(\mathbf{x}_i)+\dots+f_K(\mathbf{x}_i)$. Each tree pays $\Omega(f)=\gamma T+\tfrac12\lambda\|\mathbf{w}\|^2$, with $T$ leaves and leaf values $\mathbf{w}$.
+- $w_j$ is the number a tree outputs in leaf $j$. It plays the role of $c_m$ in a single regression tree, but it is a **correction** to the current prediction, not the average of $y$.
+
+## What XGBoost adds: the parabola
+
+```{r}
+#| echo: false
+#| fig-height: 4.2
+s0 <- 0.5                                       # current score for a row with y = 1 (log-loss)
+p0 <- 1 / (1 + exp(-s0)); g0 <- p0 - 1; h0 <- p0 * (1 - p0)
+l0 <- log(1 + exp(-s0))
+tibble(w = seq(-3, 3, length.out = 200)) |>
+  mutate(`actual loss` = log(1 + exp(-(s0 + w))),
+         `parabola (slope g, curvature h)` = l0 + g0 * w + 0.5 * h0 * w^2) |>
+  pivot_longer(-w, names_to = "curve", values_to = "loss") |>
+  ggplot(aes(w, loss, colour = curve)) + geom_line(linewidth = 1) +
+  coord_cartesian(ylim = c(0, 3.5)) +
+  labs(x = "Change w added to this row's prediction", y = "Loss for this row", colour = NULL)
+```
+
+The loss for one row, as a function of the change $w$ we add to its prediction. Near $w=0$ a parabola fits it closely. For squared error the loss is exactly a parabola.
+
+## What XGBoost adds: the leaf value
+
+Near the current prediction, one row's loss is approximately a parabola in the change $w$:
+
+$$
+\ell(y_i,\hat y_i+w) \approx \ell(y_i,\hat y_i) + g_i\,w + \tfrac12 h_i\,w^2
+$$
+
+- $g_i$ is the slope and $h_i$ the curvature (squared error: $g_i=\hat y_i-y_i$, $h_i=1$).
+- For a leaf, add over its rows and add the penalty $\tfrac12\lambda w^2$: $G\,w + \tfrac12(H+\lambda)\,w^2$, with $G=\sum g_i$, $H=\sum h_i$.
+- The lowest point of that parabola is $w^{*} = -G/(H+\lambda)$.
+
+## What XGBoost adds: the split gain
+
+The **gain** of splitting a node into left and right children is
+
+$$
+\text{Gain}=\tfrac12\Big[\tfrac{G_L^2}{H_L+\lambda}+\tfrac{G_R^2}{H_R+\lambda}-\tfrac{(G_L+G_R)^2}{H_L+H_R+\lambda}\Big]-\gamma .
+$$
+
+A split is kept only if the gain is positive, so $\gamma$ and $\lambda$ directly control overfitting.
+
+## XGBoost by hand: $g$ and $h$
+
+```{r}
+xd <- data.frame(temp = c(31, 18, 36, 22, 27, 15, 38, 24),
+                 y    = c(44, 22, 47, 25, 38, 20, 42, 29))
+lambda <- 1                    # leaf penalty
+F0 <- mean(xd$y)               # starting prediction
+xd$g <- F0 - xd$y              # slope of the loss
+xd$h <- 1                      # curvature of the loss
+t(xd)
+```
+
+- `temp`: yesterday's maximum temperature. `y`: today's demand. Starting prediction $\hat y = `r F0`$ (the mean of $y$) for every row.
+- $g_i = \hat y_i - y_i$ is the negative residual, and $h_i = 1$.
+
+## XGBoost by hand: leaf values
+
+```{r}
+leaf_stats <- function(rows) {
+  G <- sum(xd$g[rows]); H <- sum(xd$h[rows])
+  c(G = G, H = H, w = -G / (H + lambda), avg_residual = -G / H)
+}
+left <- xd$temp <= 24
+rbind(left = leaf_stats(left), right = leaf_stats(!left))
+```
+
+- Split at `temp <= 24`. Each leaf sums $g_i$ and $h_i$ over its rows, and $w^* = -G/(H+\lambda)$.
+- With $\lambda = 0$, $w^*$ is the average residual (last column).
+- With $\lambda = `r lambda`$ the left leaf moves from `r round(leaf_stats(left)["avg_residual"], 2)` to `r round(leaf_stats(left)["w"], 2)`.
+
+## XGBoost by hand: choosing the split
+
+Score every split with the gain formula. The best split has the largest gain.
+
+```{r}
+cuts <- sort(xd$temp)[-nrow(xd)]     # candidate splits
+gain <- function(s) {
+  L <- xd$temp <= s
+  GL <- sum(xd$g[L]);  HL <- sum(xd$h[L])
+  GR <- sum(xd$g[!L]); HR <- sum(xd$h[!L])
+  0.5 * (GL^2 / (HL + lambda) + GR^2 / (HR + lambda) -
+         (GL + GR)^2 / (HL + HR + lambda))
+}
+round(setNames(sapply(cuts, gain), paste0("temp<=", cuts)), 1)
+```
+
+- The split at `temp <= 24` has the largest gain. `xgboost` reports gain without the $\tfrac12$, so its number is twice ours.
+
+## XGBoost by hand: the check
+
+```{r}
+w_left <- leaf_stats(left)["w"]; w_right <- leaf_stats(!left)["w"]
+xg1 <- xgb.train(
+  params = list(objective = "reg:squarederror", eta = 1, max_depth = 1,
+                lambda = lambda, min_child_weight = 0, base_score = F0),
+  data = xgb.DMatrix(as.matrix(xd["temp"]), label = xd$y),
+  nrounds = 1, verbose = 0)
+X1 <- xgb.DMatrix(as.matrix(xd["temp"]))
+rbind(by_hand = F0 + ifelse(left, w_left, w_right),
+      xgboost = predict(xg1, X1))
+```
+
+- One round with `eta = 1` gives the same predictions as our hand calculation.
+- `xgboost` writes the same split as `temp < 27`, which separates the same days.
+
+## Why curvature helps
+
+```{r}
+#| echo: false
+#| fig-height: 3.6
+tibble(p = seq(0, 1, length.out = 101)) |>
+  mutate(`squared error` = 1, `log-loss (classification)` = p * (1 - p)) |>
+  pivot_longer(-p, names_to = "loss", values_to = "h") |>
+  ggplot(aes(p, h, colour = loss)) + geom_line(linewidth = 1) +
+  labs(x = "Predicted probability p (log-loss only)", y = "Curvature h", colour = NULL)
+```
+
+## Why curvature helps: what changes
+
+- **Squared error:** $h_i = 1$ for every row, so $H$ just counts rows and $w^*$ is the average residual, shrunk by $\lambda$. Curvature adds nothing beyond plain boosting.
+- **Log-loss:** $g_i = p_i - y_i$ and $h_i = p_i(1-p_i)$. A row the model is already sure of ($p$ near 0 or 1) has $h$ near 0 and little say in the leaf. A row at $p = 0.5$ has the most.
+- $H$ sits in the denominator of $w^*$, so the step size adapts to how confident the model is. This is where second-order matters: classification, counts and quantile losses.
+
+## The main boosting settings
+
+| Setting (xgboost name) | Effect |
+|---|---|
+| `nrounds` | Number of trees. More rounds fit more; choose with validation |
+| `eta` | Learning rate. Smaller is safer and needs more rounds |
+| `max_depth` | Depth of each tree. 3 to 6 typical; controls interaction order |
+| `subsample` | Fraction of rows per tree. Below 1 adds randomness and reduces overfitting |
+| `colsample_bytree` | Fraction of features per tree |
+| `min_child_weight` | Minimum curvature sum in a leaf. Larger is more conservative |
+| `lambda`, `gamma` | L2 penalty on leaf weights, minimum gain to split |
+
+For time series, the **number of rounds** is usually chosen by early stopping on a *later* validation period.
+
+## Fitting XGBoost
+
+```{r}
+dtr <- xgb.DMatrix(as.matrix(tr[, xs]), label = tr$Demand)
+dte <- xgb.DMatrix(as.matrix(te[, xs]), label = te$Demand)
+
+xg <- xgb.train(
+  params = list(objective = "reg:squarederror", eta = 0.05, max_depth = 4,
+                subsample = 0.8, colsample_bytree = 0.8),
+  data = dtr, nrounds = 300, verbose = 0)
+
+rmse(te$Demand, predict(xg, dte))
+```
+
+## Watching overfitting: the code
+
+```{r}
+#| output: false
+curve_fit <- xgb.train(
+  params = list(objective = "reg:squarederror", eta = 0.05, max_depth = 6,
+                subsample = 0.8, colsample_bytree = 0.8),
+  data = dtr, nrounds = 600, evals = list(train = dtr, test = dte), verbose = 0)
+
+p_curve <- as_tibble(attributes(curve_fit)$evaluation_log) |>
+  pivot_longer(-iter, names_to = "set", values_to = "rmse") |>
+  ggplot(aes(iter, rmse, colour = set)) + geom_line() +
+  labs(x = "Boosting rounds", y = "RMSE", colour = NULL)
+```
+
+- The test set is used only to draw this picture. To choose `nrounds`, use a separate validation period (below).
+
+## Watching overfitting: the learning curve
+
+```{r}
+#| echo: false
+#| fig-height: 4.2
+p_curve
+```
+
+- Training error keeps falling. Test error stops improving, and may rise.
+- Training error is *not* a guide to forecast accuracy.
+
+# 2.6 Validation and tuning for time series
+
+## Why shuffled cross-validation is wrong
+
+Standard $k$-fold CV shuffles rows. For time series that means:
+
+- Training rows from the **future** of a test row. The model "knows" what happens next.
+- Neighbouring rows (nearly identical lag features) split across train and test.
+
+The correct scheme is **time-ordered**: always train on the past, test on the future (rolling-origin / expanding-window CV).
+
+## Time-ordered folds
+
+```{r}
+#| echo: false
+#| fig-height: 3.8
+tibble(fold = rep(1:3, each = 12), t = rep(1:12, 3),
+       role = c(rep(c("train", "test", "unused"), c(3, 3, 6)),
+                rep(c("train", "test", "unused"), c(6, 3, 3)),
+                rep(c("train", "test", "unused"), c(9, 3, 0)))) |>
+  ggplot(aes(t, factor(fold), fill = role)) + geom_tile(colour = "white") +
+  scale_fill_manual(values = c(train = "#2a78d6", test = "#eb6834", unused = "grey90")) +
+  labs(x = "Time", y = "Fold", fill = NULL)
+```
+
+Each fold trains on the past and tests on the block that follows.
+
+## Shuffled vs time-ordered CV on our data
+
+```{r}
+all_rows <- feat
+fit_eval <- function(trn, tst) {
+  m <- ranger(Demand ~ ., data = all_rows[trn, c("Demand", xs)], num.trees = 300, seed = 1)
+  rmse(all_rows$Demand[tst], predict(m, all_rows[tst, xs])$predictions)
+}
+
+set.seed(2)
+fold_id <- sample(rep(1:5, length.out = nrow(all_rows)))
+shuffled <- sapply(1:5, function(k) fit_eval(which(fold_id != k), which(fold_id == k)))
+
+idx <- which(all_rows$Date > as.Date("2013-01-01"))
+blocks <- split(idx, cut(seq_along(idx), 5, labels = FALSE))
+ordered <- sapply(blocks, function(b) fit_eval(1:(min(b) - 1), b))
+
+rbind(shuffled = round(shuffled, 2), time_ordered = round(ordered, 2))
+c(shuffled_mean = mean(shuffled), time_ordered_mean = mean(ordered))
+```
+
+- Here the average gap is modest, but the **time-ordered folds vary a lot** (some blocks are much harder, e.g. summer peaks). Shuffled folds hide that.
+- A single test period (like 2014) is one draw from this variation. Treat any single split with caution.
+
+## Setting up the tuning
+
+We choose `max_depth` and the number of rounds.
+
+- **Validation blocks:** the last three quarters of the training period. Train on the days before a block, score on the block.
+- **Why also hold out a test year:** the best validation score is optimistic, because many candidates were compared on it. The test year is used once, after all choices are made.
+- **How we choose:** the minimum validation RMSE, for ease of coding. If the curve is flat near the minimum, the elbow or the simplest setting within one standard error is a common alternative.
+
+## Tuning with time-ordered folds
+
+We choose `max_depth` and the number of rounds using three validation blocks at the end of the **training** period only.
+
+```{r}
+val_blocks <- list(c("2013-04-01", "2013-06-30"),
+                   c("2013-07-01", "2013-09-30"),
+                   c("2013-10-01", "2013-12-31"))
+
+tune_one <- function(depth, eta = 0.05, max_rounds = 400) {
+  logs <- sapply(val_blocks, function(b) {
+    s <- as.Date(b[1]); e <- as.Date(b[2])
+    trn <- tr |> filter(Date < s); val <- tr |> filter(Date >= s, Date <= e)
+    d1 <- xgb.DMatrix(as.matrix(trn[, xs]), label = trn$Demand)
+    d2 <- xgb.DMatrix(as.matrix(val[, xs]), label = val$Demand)
+    f <- xgb.train(params = list(objective = "reg:squarederror", eta = eta, max_depth = depth,
+                                 subsample = 0.8, colsample_bytree = 0.8),
+                   data = d1, nrounds = max_rounds, evals = list(val = d2), verbose = 0)
+    attributes(f)$evaluation_log$val_rmse
+  })
+  mean_curve <- rowMeans(logs)
+  tibble(depth = depth, best_rounds = which.min(mean_curve), cv_rmse = min(mean_curve))
+}
+tuning <- bind_rows(lapply(c(2, 3, 4, 6), tune_one))
+tuning
+```
+
+## Using the tuned settings
+
+```{r}
+best <- tuning |> slice_min(cv_rmse, n = 1)
+best
+
+xg_tuned <- xgb.train(
+  params = list(objective = "reg:squarederror", eta = 0.05, max_depth = best$depth,
+                subsample = 0.8, colsample_bytree = 0.8),
+  data = dtr, nrounds = best$best_rounds, verbose = 0)
+
+c(untuned_test = rmse(te$Demand, predict(xg, dte)),
+  tuned_test   = rmse(te$Demand, predict(xg_tuned, dte)))
+```
+
+- The test set was touched only once, after all choices were made.
+- Notice the tuned model is **not better** on the test year than the untuned one. The validation blocks (three quarters of 2013) gave RMSE near 8, while the test year gives about 15: different periods have different difficulty, so tuning gains on one period need not carry over. Tuning is worth doing, but expect modest, noisy gains.
+- Tuning on the test set is the most common way to fool yourself.
+
+# 2.7 Results on the electricity data
+
+## Trees vs classical models
+
+Classical models for the same task: ETS, ARIMA, and a lag regression with ARIMA errors given the same calendar information (day-of-week and holiday), all fixed after training and scored one step ahead.
+
+```{r}
+el_ts <- el |>
+  mutate(Temp2 = Temp^2, T_l1 = lag(Temp, 1), T2_l1 = lag(Temp2, 1),
+         dow2 = as.numeric(lubridate::wday(Date) == 2), dow3 = as.numeric(lubridate::wday(Date) == 3),
+         dow4 = as.numeric(lubridate::wday(Date) == 4), dow5 = as.numeric(lubridate::wday(Date) == 5),
+         dow6 = as.numeric(lubridate::wday(Date) == 6), dow7 = as.numeric(lubridate::wday(Date) == 7)) |>
+  filter(!is.na(T_l1)) |>
+  as_tsibble(index = Date)
+
+fits <- el_ts |> filter(Date <= train_end) |>
+  model(SNAIVE = SNAIVE(Demand),
+        ETS    = ETS(Demand),
+        ARIMA  = ARIMA(Demand),
+        LagReg = ARIMA(Demand ~ T_l1 + T2_l1 + Holiday + dow2 + dow3 + dow4 + dow5 + dow6 + dow7))
+
+classical <- refit(fits, el_ts, reestimate = FALSE) |>
+  augment() |> as_tibble() |> filter(Date > train_end) |>
+  group_by(model = .model) |> summarise(RMSE = rmse(Demand, .fitted))
+```
+
+## The scoreboard
+
+```{r}
+ml <- tibble(model = c("Random forest", "XGBoost (untuned)", "XGBoost (tuned)"),
+             RMSE = c(rmse(te$Demand, rf_pred),
+                      rmse(te$Demand, predict(xg, dte)),
+                      rmse(te$Demand, predict(xg_tuned, dte))))
+bind_rows(classical, ml) |>
+  mutate(`vs seasonal naive` = RMSE / RMSE[model == "SNAIVE"]) |>
+  arrange(RMSE) |>
+  mutate(across(where(is.numeric), ~ round(.x, 3)))
+```
+
+## How to read this table
+
+- All of these learn the strong weekly and calendar structure, so every model is far better than seasonal naive.
+- **The trees are not automatically better than the classical models.** XGBoost beat plain ARIMA, but ETS and the lag regression (given the same calendar information) were both better, and the random forest was about level with ARIMA.
+- One year, one split, one step ahead: the ranking among the close models is not reliable.
+- Where trees *should* help: many predictors, nonlinear effects and interactions that you did not specify (they find the U-shape in temperature by themselves), and very many series (Section 2.11).
+- Where they struggle: trends (next section).
+
+# 2.8 Trees and trends
+
+## The extrapolation problem, on real data
+
+Quarterly Australian electricity production has a strong upward trend. Train through 1995, then test 1996-2010.
+
+```{r}
+ap <- aus_production |>
+  transmute(Quarter, y = Electricity) |>
+  as_tibble() |>
+  mutate(l1 = lag(y, 1), l2 = lag(y, 2), l3 = lag(y, 3), l4 = lag(y, 4),
+         q = lubridate::quarter(Quarter)) |>
+  filter(!is.na(l4))
+ap_tr <- ap |> filter(Quarter <= yearquarter("1995 Q4"))
+ap_te <- ap |> filter(Quarter >  yearquarter("1995 Q4"))
+lag_cols <- c("l1", "l2", "l3", "l4", "q")
+
+c(train_max = max(ap_tr$y), test_max = max(ap_te$y))
+```
+
+The test period contains values far above anything in training.
+
+## One-step forecasts: the code
+
+```{r}
+#| output: false
+ap_rf <- ranger(y ~ ., data = ap_tr[, c("y", lag_cols)], num.trees = 500, seed = 1)
+ap_xg <- xgb.train(params = list(objective = "reg:squarederror", eta = 0.05, max_depth = 3),
+                   data = xgb.DMatrix(as.matrix(ap_tr[, lag_cols]), label = ap_tr$y),
+                   nrounds = 300, verbose = 0)
+
+ap_res <- ap_te |> mutate(
+  RF  = predict(ap_rf, ap_te[, lag_cols])$predictions,
+  XGB = predict(ap_xg, xgb.DMatrix(as.matrix(ap_te[, lag_cols]))))
+
+p_trend <- ap_res |> rename(Actual = y) |> pivot_longer(c(Actual, RF, XGB)) |>
+  ggplot(aes(as.Date(Quarter), value, colour = name)) + geom_line() +
+  labs(x = NULL, y = "Electricity", colour = NULL)
+```
+
+## One-step forecasts: the result
+
+```{r}
+#| echo: false
+#| fig-height: 4.2
+p_trend
+```
+
+- Both tree models flatten out near the largest training value while the series keeps climbing.
+
+## Fix 1: model changes, not levels
+
+Predict the *change from the same quarter last year*, $y_t-y_{t-4}$, then add it back. The target now stays within the range seen in training.
+
+```{r}
+ap_tr2 <- ap_tr |> mutate(d = y - l4)
+ap_rf_d <- ranger(d ~ ., data = ap_tr2[, c("d", lag_cols)], num.trees = 500, seed = 1)
+ap_diff_pred <- ap_te$l4 + predict(ap_rf_d, ap_te[, lag_cols])$predictions
+
+ap_classical <- {
+  f <- aus_production |> filter(Quarter <= yearquarter("1995 Q4")) |>
+    model(ETS = ETS(Electricity), ARIMA = ARIMA(Electricity), SNAIVE = SNAIVE(Electricity))
+  refit(f, aus_production, reestimate = FALSE) |> augment() |> as_tibble() |>
+    filter(Quarter > yearquarter("1995 Q4")) |>
+    group_by(model = .model) |> summarise(RMSE = rmse(Electricity, .fitted))
+}
+
+bind_rows(
+  ap_classical,
+  tibble(model = c("RF on levels", "XGBoost on levels", "RF on seasonal difference"),
+         RMSE = c(rmse(ap_te$y, ap_res$RF), rmse(ap_te$y, ap_res$XGB),
+                  rmse(ap_te$y, ap_diff_pred)))) |>
+  arrange(RMSE) |> mutate(RMSE = round(RMSE))
+```
+
+## Other ways to handle trends
+
+- **Difference or take growth rates** before modelling (as above), then add the level back. Often the first thing to try.
+- **Hybrid:** fit a simple trend (linear regression or ETS), then fit trees to the **residuals**. The trend model extrapolates; the trees capture what is left.
+- **Include a linear model inside the leaves** (model trees, or LightGBM's `linear_tree` option), so each region has its own slope.
+- **Normalize each series by a recent level** (global models do this routinely).
+- Or use a model that extrapolates by design (ETS, ARIMA with drift) and give the trees the *exogenous* features.
+
+# 2.9 Multi-step forecasts and uncertainty
+
+## Three ways to forecast $h$ steps ahead
+
+| Strategy | How | Pros | Cons |
+|---|---|---|---|
+| **Recursive** | One one-step model. Forecast $\hat y_{t+1}$, feed it back as a lag, repeat | One model; uses all data | Errors compound; needs forecasts of any other inputs |
+| **Direct** | A separate model for each horizon $h$ (target $y_{t+h}$, features at $t$) | No compounding; each model targets its own horizon | $H$ models; ignores relationships between horizons |
+| **Multi-output** | One model predicts all $H$ values together (natural for neural nets) | Shares structure across horizons | Needs a model that supports vector targets |
+
+Classical models (ARIMA, ETS) are recursive by construction.
+
+## Direct vs recursive: sunspots, 10 steps ahead
+
+Square-root sunspot counts, 9 lags, XGBoost. Train through 1958, forecast from every origin 1958 to 1978.
+
+```{r}
+y <- as.numeric(sqrt(sunspot.year)); n <- length(y); p <- 9; H <- 10
+T0 <- which(as.numeric(time(sunspot.year)) == 1958)
+
+make_xy <- function(y, p, h) {
+  t_idx <- p:(length(y) - h)
+  X <- t(sapply(t_idx, function(t) y[t:(t - p + 1)])); colnames(X) <- paste0("l", 0:(p - 1))
+  list(X = X, y = y[t_idx + h])
+}
+fit_xgb <- function(X, y) xgb.train(
+  params = list(objective = "reg:squarederror", eta = 0.05, max_depth = 3, subsample = 0.8),
+  data = xgb.DMatrix(X, label = y), nrounds = 200, verbose = 0)
+
+ytr <- y[1:T0]
+direct_models <- lapply(1:H, function(h) { d <- make_xy(ytr, p, h); fit_xgb(d$X, d$y) })
+one_step <- { d <- make_xy(ytr, p, 1); fit_xgb(d$X, d$y) }
+```
+
+## Running both strategies
+
+```{r}
+as_row <- function(v) { m <- matrix(v, nrow = 1); colnames(m) <- paste0("l", 0:(p - 1)); xgb.DMatrix(m) }
+
+errs <- lapply(T0:(n - H), function(o) {
+  buf <- y[1:o]; rec <- numeric(H)
+  for (h in 1:H) { rec[h] <- predict(one_step, as_row(rev(tail(buf, p)))); buf <- c(buf, rec[h]) }
+  x <- as_row(rev(tail(y[1:o], p)))
+  tibble(h = 1:H, actual = y[o + 1:H], recursive = rec,
+         direct = sapply(1:H, function(k) predict(direct_models[[k]], x)),
+         naive = y[o])
+}) |> bind_rows()
+
+errs |> group_by(h) |>
+  summarise(across(c(recursive, direct, naive), ~ rmse(actual, .x))) |>
+  mutate(across(-h, ~ round(.x, 2)))
+```
+
+- Neither strategy wins at every horizon; the leader flips from one horizon to the next. The differences are within noise.
+- Both beat the naive forecast by a wide margin at medium horizons; by horizon 10 all three are similar.
+- Few origins and one series: treat this as an illustration of the mechanics, not a verdict on the strategies.
+
+## Prediction intervals for tree models
+
+Trees give point forecasts. Intervals need an extra step. Three practical options:
+
+1. **Quantile regression forests:** each leaf stores *all* training targets (not only the average); the forecast distribution is the weighted empirical distribution of those values. In `ranger`, set `quantreg = TRUE`.
+2. **Quantile boosting:** train with a quantile loss ("pinball loss") for each quantile you want (for example the 5% and 95% quantiles).
+3. **Conformal prediction:** use the model's errors on a held-out calibration period to size the interval: $\hat y \pm q$, where $q$ is the $(1-\alpha)$ quantile of absolute calibration errors.
+
+## Quantile forest on electricity
+
+```{r}
+rq <- ranger(Demand ~ ., data = tr[, c("Demand", xs)], num.trees = 500,
+             quantreg = TRUE, seed = 1)
+qs <- predict(rq, te[, xs], type = "quantiles", quantiles = c(0.05, 0.5, 0.95))$predictions
+
+c(coverage_90 = mean(te$Demand >= qs[, 1] & te$Demand <= qs[, 3]),
+  avg_width = mean(qs[, 3] - qs[, 1]))
+```
+
+- Empirical coverage near the nominal 90% is the target. Always check it on held-out data.
+- Intervals rely on future errors resembling past errors; they will be too narrow if conditions change.
+
+## Quantile forest: the intervals
+
+```{r}
+#| echo: false
+#| fig-height: 4.2
+tibble(Date = te$Date, actual = te$Demand, lo = qs[, 1], mid = qs[, 2], hi = qs[, 3]) |>
+  filter(Date < as.Date("2014-03-01")) |>
+  ggplot(aes(Date)) + geom_ribbon(aes(ymin = lo, ymax = hi), fill = "#2a78d6", alpha = 0.25) +
+  geom_line(aes(y = mid), colour = "#2a78d6") + geom_line(aes(y = actual)) +
+  labs(x = NULL, y = "Demand (GWh)", title = "90% interval (blue band), actual (black), one step ahead")
+```
+
+## Quantile boosting on electricity
+
+```{r}
+qb <- xgb.train(
+  params = list(objective = "reg:quantileerror", quantile_alpha = c(0.05, 0.5, 0.95),
+                eta = 0.05, max_depth = 4, subsample = 0.8, colsample_bytree = 0.8, seed = 1),
+  data = dtr, nrounds = 300, verbose = 0)
+qb_pred <- predict(qb, xgb.DMatrix(as.matrix(te[, xs])))
+
+qb_cov <- mean(te$Demand >= qb_pred[, 1] & te$Demand <= qb_pred[, 3])
+c(coverage_90 = qb_cov, avg_width = mean(qb_pred[, 3] - qb_pred[, 1]))
+```
+
+- One model, trained with the pinball loss, returns the 5%, 50% and 95% quantiles.
+- Coverage on 2014 is `r round(100 * qb_cov)`%, against a 90% target.
+
+## Quantile boosting: the intervals
+
+```{r}
+#| echo: false
+#| fig-height: 4.2
+tibble(Date = te$Date, actual = te$Demand, lo = qb_pred[, 1], mid = qb_pred[, 2], hi = qb_pred[, 3]) |>
+  filter(Date < as.Date("2014-03-01")) |>
+  ggplot(aes(Date)) + geom_ribbon(aes(ymin = lo, ymax = hi), fill = "#2a78d6", alpha = 0.25) +
+  geom_line(aes(y = mid), colour = "#2a78d6") + geom_line(aes(y = actual)) +
+  labs(x = NULL, y = "Demand (GWh)", title = "90% interval (blue band), actual (black), one step ahead")
+```
+
+## Conformal prediction on electricity
+
+```{r}
+alpha <- 0.1
+cp_model <- xgb.train(
+  params = list(objective = "reg:squarederror", eta = 0.05, max_depth = 4,
+                subsample = 0.8, colsample_bytree = 0.8, seed = 1),
+  data = xgb.DMatrix(as.matrix(fv_trn[, xs]), label = fv_trn$Demand), nrounds = 300, verbose = 0)
+cal_err <- abs(fv_val$Demand - predict(cp_model, xgb.DMatrix(as.matrix(fv_val[, xs]))))
+n_cal <- length(cal_err)
+q_hat <- quantile(cal_err, ceiling((n_cal + 1) * (1 - alpha)) / n_cal)
+cp_pred <- predict(cp_model, xgb.DMatrix(as.matrix(te[, xs])))
+cp_cov <- mean(abs(te$Demand - cp_pred) <= q_hat)
+c(q_hat = unname(q_hat), coverage_90 = cp_cov, avg_width = 2 * unname(q_hat))
+```
+
+- Calibration set: errors on July to December 2013. $\hat q$ is their 90% quantile, and the interval is the forecast $\pm\,\hat q$. Coverage on 2014 is `r round(100 * cp_cov)`%.
+
+## Conformal prediction: the intervals
+
+```{r}
+#| echo: false
+#| fig-height: 4.2
+tibble(Date = te$Date, actual = te$Demand, pred = cp_pred, lo = cp_pred - q_hat, hi = cp_pred + q_hat) |>
+  filter(Date < as.Date("2014-03-01")) |>
+  ggplot(aes(Date)) + geom_ribbon(aes(ymin = lo, ymax = hi), fill = "#2a78d6", alpha = 0.25) +
+  geom_line(aes(y = pred), colour = "#2a78d6") + geom_line(aes(y = actual)) +
+  labs(x = NULL, y = "Demand (GWh)", title = "90% interval (blue band), actual (black), one step ahead")
+```
+
+# 2.10 Interpretation
+
+## What did the model learn?
+
+**Permutation importance:** the rise in error when one feature is scrambled.
+
+1. Compute the model's error (MSE) on the data as it is.
+2. **Shuffle one feature:** reorder that column's values at random among the rows. Other columns and the target stay put, so each row gets another row's value for this feature.
+3. Recompute the error. Importance is the **increase** in MSE. Repeat for each feature.
+4. A big increase means the model relied on the feature. Near zero means it did not.
+
+## Permutation importance: the code
+
+```{r}
+#| output: false
+rfi <- ranger(Demand ~ ., data = tr[, c("Demand", xs)], num.trees = 500,
+              importance = "permutation", seed = 1)
+p_imp <- tibble(feature = names(rfi$variable.importance), importance = rfi$variable.importance) |>
+  ggplot(aes(reorder(feature, importance), importance)) + geom_col(fill = "#2a78d6") +
+  coord_flip() + labs(x = NULL, y = "Increase in MSE when shuffled")
+```
+
+## Permutation importance: the result
+
+```{r}
+#| echo: false
+#| fig-height: 4.2
+p_imp
+```
+
+- Recent demand and the weekly pattern matter most.
+- **Caution:** correlated features (lag1, lag2, roll7) share credit, so importances of individual lags are unreliable. Think in groups.
+
+## Partial dependence: the code
+
+How does predicted demand change with yesterday's temperature, averaging over everything else?
+
+```{r}
+#| output: false
+grid <- seq(min(tr$temp_l1), max(tr$temp_l1), length.out = 40)
+pdp <- sapply(grid, function(v) { d <- te[, xs]; d$temp_l1 <- v;
+                                   mean(predict(rf, d)$predictions) })
+p_pdp <- tibble(temp = grid, demand = pdp) |>
+  ggplot(aes(temp, demand)) + geom_line(linewidth = 1) +
+  labs(x = "Yesterday's maximum temperature (C)", y = "Average predicted demand")
+```
+
+- Partial dependence describes the *model*, not causality, and can mislead when features are strongly correlated.
+
+## Partial dependence: learning the U-shape
+
+```{r}
+#| echo: false
+#| fig-height: 4.2
+p_pdp
+```
+
+- The forest was never told the relationship is nonlinear. It rises in the cold and, more strongly, in the heat.
+- The overall effect is modest (a few GWh): yesterday's demand already carries most of the information.
+
+# 2.11 Global models
+
+## Many series, one model
+
+Data: `tourism`, quarterly trips by region, state and purpose of travel: **304 series**, 80 quarters each (1998-2017).
+
+```{r}
+tz <- tourism |> as_tibble() |> mutate(sid = paste(Region, State, Purpose, sep = "|"))
+c(series = n_distinct(tz$sid), quarters = n_distinct(tz$Quarter))
+
+wide <- tz |> dplyr::select(sid, Quarter, Trips) |>
+  pivot_wider(names_from = Quarter, values_from = Trips)
+M <- as.matrix(wide[, -1]); rownames(M) <- wide$sid
+meta <- tz |> distinct(sid, State, Purpose)
+dim(M)
+```
+
+Plan: hold out the **last 8 quarters of every series** (the same calendar dates for all), forecast 1 to 8 quarters ahead, and compare:
+
+- **Local ETS**, one per series.
+- **Local XGBoost**, one per series per horizon (each sees only ~70 rows).
+- **Global XGBoost**, one model per horizon trained on all series together.
+- Seasonal naive.
+
+## Preparing the global data
+
+```{r}
+H <- 8; P <- 8                       # horizon, number of lags
+Tn <- ncol(M); Tcut <- Tn - H        # forecast origin: the end of training
+
+scale_i <- rowMeans(M[, 1:Tcut])     # per-series scale, from TRAINING data only
+Ms <- M / scale_i                    # every series now has mean about 1
+
+state_code <- as.integer(factor(meta$State[match(rownames(M), meta$sid)]))
+purp_code  <- as.integer(factor(meta$Purpose[match(rownames(M), meta$sid)]))
+sd_i       <- apply(Ms[, 1:Tcut], 1, sd)          # how volatile is this series?
+qtr        <- (seq_len(Tn) - 1) %% 4 + 1          # quarter of the year
+
+feat_at <- function(i, t) c(Ms[i, t:(t - P + 1)], q = qtr[t],
+                            state = state_code[i], purp = purp_code[i], sd = sd_i[i])
+fnames <- c(paste0("l", 0:(P - 1)), "q", "state", "purp", "sd")
+```
+
+- **Normalization** puts big and small series on a common scale so one model can learn shared shapes.
+- **Series descriptors** (state, purpose, volatility) let the model treat series differently when it needs to.
+- The scale and the volatility are computed from the training period only.
+
+## Training the global and local models
+
+```{r}
+fit_xgb_g <- function(X, y) xgb.train(
+  params = list(objective = "reg:squarederror", eta = 0.05, max_depth = 4,
+                subsample = 0.8, colsample_bytree = 0.8),
+  data = xgb.DMatrix(X, label = y), nrounds = 300, verbose = 0)
+
+# global: one model per horizon, trained on every series' history
+global_models <- lapply(1:H, function(h) {
+  rows <- expand.grid(i = seq_len(nrow(M)), t = P:(Tcut - h))
+  X <- t(mapply(feat_at, rows$i, rows$t)); colnames(X) <- fnames
+  fit_xgb_g(X, Ms[cbind(rows$i, rows$t + h)])
+})
+
+origin_X <- t(sapply(seq_len(nrow(M)), function(i) feat_at(i, Tcut)))
+colnames(origin_X) <- fnames
+pred_global <- sapply(1:H, function(h) predict(global_models[[h]], xgb.DMatrix(origin_X)))
+```
+
+```{r}
+
+# local: a separate model for each series and horizon, using only that series' ~70 rows
+pred_local <- matrix(NA, nrow(M), H)
+for (i in seq_len(nrow(M))) for (h in 1:H) {
+  tt <- P:(Tcut - h)
+  X <- t(sapply(tt, function(t) feat_at(i, t))); colnames(X) <- fnames
+  pred_local[i, h] <- predict(fit_xgb_g(X, Ms[i, tt + h]),
+                              xgb.DMatrix(origin_X[i, , drop = FALSE]))
+}
+```
+
+## Global vs local: what to notice
+
+- **Only the training data differs.** Same features, same settings. The global model for $h = 1$ learns from `r format(nrow(M) * (Tcut - P), big.mark = ",")` rows (`r nrow(M)` series × `r Tcut - P` time points). Each local model sees one series: `r Tcut - P - H + 1` to `r Tcut - P` rows.
+- **State, purpose and volatility do nothing locally.** They are constant within a series, so a local model cannot split on them. They let the global model tell series apart.
+- **One model per horizon:** `r H` global models, against `r format(nrow(M) * H, big.mark = ",")` local models.
+
+## Scoring: MASE
+
+**MASE** (mean absolute scaled error) divides each series' error by the in-sample seasonal-naive error, making errors comparable across series. Below 1 beats in-sample seasonal naive.
+
+```{r}
+actual   <- Ms[, (Tcut + 1):Tn]
+mase_den <- apply(Ms[, 1:Tcut], 1, function(v) mean(abs(diff(v, lag = 4))))
+mase     <- function(pred) mean(abs(actual - pred) / mase_den)
+
+pred_snaive <- t(sapply(seq_len(nrow(M)), function(i) Ms[i, Tcut - 4 + ((1:H - 1) %% 4) + 1]))
+
+ets_fit <- tz |> filter(Quarter <= sort(unique(tz$Quarter))[Tcut]) |>
+  as_tsibble(key = c(Region, State, Purpose, sid), index = Quarter) |>
+  model(ETS(Trips))
+ets_fc <- ets_fit |> forecast(h = H) |> as_tibble() |>
+  dplyr::select(sid, Quarter, .mean) |> pivot_wider(names_from = Quarter, values_from = .mean)
+pred_ets <- as.matrix(ets_fc[, -1])[match(rownames(M), ets_fc$sid), ] / scale_i
+
+tibble(model = c("Seasonal naive", "Local XGBoost", "Global XGBoost", "Local ETS"),
+       MASE = c(mase(pred_snaive), mase(pred_local), mase(pred_global), mase(pred_ets))) |>
+  arrange(MASE) |> mutate(MASE = round(MASE, 3))
+```
+
+## What to take from the tourism result
+
+- The **global** XGBoost model does better than the **local** one trained on each series alone: sharing information across series helps when each series is short.
+- Both ML models beat seasonal naive.
+- **Local ETS is hard to beat here.** Tourism series are smooth, strongly seasonal and short, which is exactly what ETS is built for.
+- The global model was given little: no tuning and basic features. Competition-winning global models use richer features and ensembles.
+- Bottom line: global models are a good bet with **many** related series, and are not a replacement for a strong classical method on well-behaved seasonal data.
+
+## Design decisions for global models
+
+- **Normalize** each series (by its mean or recent level) and forecast the scaled value, then rescale.
+- **Series identifiers or descriptors** as features (category codes, size, volatility); more flexible models can use learned embeddings.
+- **Cut every series at the same date** for validation. Training on series A's future while testing on series B's past leaks shared shocks (for example a pandemic).
+- **Windows from all series, all times:** the training table is (series × time points) rows, so global models get big quickly.
+- **New series with no history (cold start):** global models can forecast from descriptors alone, which local models cannot.
+- **Loss and weighting:** an unweighted squared error is dominated by large series, which is why we scaled. Check that errors are fair across series sizes.
+
+# 2.12 Attention and Transformers
+
+## The problem attention solves
+
+- **Fixed window models** (AR, trees on lags) see only the $p$ lags you chose. A relevant event outside the window is invisible.
+- **RNN/LSTM** squeeze the past through a bottleneck, one step at a time. Distant events must survive many updates, and training cannot be parallelized across time steps.
+- **Attention** connects every time step directly to every other: any past moment can influence the forecast in one step, and the strength of the influence is learned.
+
+## A first look: attention without any learning
+
+Before the Transformer machinery, here is the *idea* in a few lines. To forecast the next sunspot value:
+
+1. Take the last 9 values (the **query**).
+2. Compare them with every past window of 9 values (the **keys**).
+3. Each past window has a **value**: what came next.
+4. Weight the values by how similar the window is to the query, and average.
+
+$$
+\hat y_{t+1} = \sum_s w_s\, v_s, \qquad
+w_s=\frac{\exp(-\|q-k_s\|^2/\tau)}{\sum_{u}\exp(-\|q-k_u\|^2/\tau)}.
+$$
+
+This is "analog forecasting" or a kernel smoother. It has no learned parameters except the temperature $\tau$.
+
+## Attention-style forecasting on sunspots
+
+```{r}
+ys <- as.numeric(sqrt(sunspot.year)); yrs <- as.numeric(time(sunspot.year)); pw <- 9
+analog <- function(t, tau) {                  # forecast ys[t+1] from windows that end before t
+  q <- ys[(t - pw + 1):t]                     # query
+  s <- pw:(t - 1)
+  K <- t(sapply(s, function(k) ys[(k - pw + 1):k]))   # keys: past windows
+  v <- ys[s + 1]                              # values: what came next
+  d2 <- rowSums((K - matrix(q, nrow(K), pw, byrow = TRUE))^2)
+  w <- exp(-(d2 - min(d2)) / tau); w <- w / sum(w)    # softmax over -distance
+  c(pred = sum(w * v), eff_n = 1 / sum(w^2))
+}
+
+# choose tau on a validation slice INSIDE the training period (1930-1958)
+val <- which(yrs >= 1930 & yrs <= 1957)
+sapply(c(1, 5, 20, 100), function(tau)
+  c(tau = tau, val_rmse = rmse(ys[val + 1], sapply(val, function(t) analog(t, tau)["pred"]))))
+```
+
+## Test results
+
+```{r}
+test_t <- which(yrs >= 1959)
+tau_sel <- 5                                   # best value on the validation slice
+an <- t(sapply(test_t - 1, function(t) analog(t, tau_sel)))
+
+ar9 <- ar(ys[1:which(yrs == 1958)], order.max = 9, aic = FALSE, method = "ols")
+ar_pred <- sapply(test_t, function(t) ar9$x.intercept + sum(ar9$ar * ys[(t - 1):(t - 9)]))
+
+c(attention_style = rmse(ys[test_t], an[, "pred"]),
+  AR9 = rmse(ys[test_t], ar_pred),
+  naive = rmse(ys[test_t], ys[test_t - 1]),
+  effective_windows_used = mean(an[, "eff_n"]))
+```
+
+- The forecast leans on about `r round(mean(an[, "eff_n"]), 1)` past windows out of hundreds: it **selects** relevant history.
+- AR(9) applies the same 9 weights every time. Attention-style weights change with every query.
+- This is a toy (one series, nothing learned but $\tau$), but it shows the idea.
+
+## Scaled dot-product attention
+
+A Transformer learns what to compare. For a sequence of $L$ time steps with embeddings $X\in\mathbb{R}^{L\times d}$:
+
+$$
+Q = XW_Q,\quad K = XW_K,\quad V = XW_V,
+\qquad
+\text{Attention}(Q,K,V)=\operatorname{softmax}\!\Big(\frac{QK^\top}{\sqrt{d_k}}\Big)V .
+$$
+
+- $W_Q, W_K, W_V$ are **learned** projection matrices.
+- $QK^\top$ is an $L\times L$ table of similarity scores: step $i$'s query against step $j$'s key.
+- Dividing by $\sqrt{d_k}$ keeps the scores from growing with dimension and saturating the softmax.
+- Each row of the softmax sums to 1: the weights over the past for that step.
+- The output at each step is a weighted average of the **values**.
+
+## One attention head, computed by hand
+
+Six time steps of standardized sunspot values, with random (untrained) projection matrices, to show the mechanics.
+
+```{r}
+set.seed(42)
+x <- as.numeric(scale(ys[100:105])); L <- length(x); d <- 4
+X  <- cbind(x, sin(1:L), cos(1:L), 1)                       # a small "embedding" per step
+Wq <- matrix(rnorm(d * d), d); Wk <- matrix(rnorm(d * d), d); Wv <- matrix(rnorm(d * d), d)
+Q <- X %*% Wq; K <- X %*% Wk; V <- X %*% Wv
+
+scores <- Q %*% t(K) / sqrt(d)
+softmax_rows <- function(S) t(apply(S, 1, function(r) exp(r - max(r)) / sum(exp(r - max(r)))))
+A <- softmax_rows(scores)
+round(A, 2)
+rowSums(A)
+```
+
+Row $i$ shows how much step $i$ attends to each step $j$. Here every step can see the future, which is wrong for forecasting. The fix is a mask.
+
+## Causal masking
+
+For forecasting, step $i$ must only attend to steps $j\le i$. Add $-\infty$ to the forbidden scores before the softmax:
+
+```{r}
+mask <- matrix(0, L, L); mask[upper.tri(mask)] <- -Inf
+A_causal <- softmax_rows(scores + mask)
+round(A_causal, 2)
+```
+
+- The upper triangle is zero: no looking ahead.
+- Without the mask the model could copy the answer from the future, which is leakage inside the architecture.
+- Output for step $i$: `A_causal[i, ] %*% V`.
+
+## Order information: positional encoding
+
+Attention treats its inputs as an unordered **set**: shuffle the time steps and the same weights come out (just shuffled). Time order must be injected, for example with sinusoidal encodings:
+
+$$
+\text{PE}(pos,2i)=\sin\!\Big(\frac{pos}{10000^{2i/d}}\Big),\qquad
+\text{PE}(pos,2i+1)=\cos\!\Big(\frac{pos}{10000^{2i/d}}\Big),
+$$
+
+added to each step's embedding. Learned position embeddings are an alternative.
+
+## Positional encoding: what it looks like
+
+```{r}
+#| echo: false
+#| fig-height: 4.2
+d_model <- 32
+pe <- outer(0:23, 0:(d_model - 1),
+            function(pos, j) ifelse(j %% 2 == 0, sin(pos / 10000^(j / d_model)),
+                                    cos(pos / 10000^((j - 1) / d_model))))
+image(t(pe[24:1, ]), axes = FALSE, col = hcl.colors(30, "Blue-Red 3"),
+      xlab = "encoding dimension", ylab = "time step (position)")
+```
+
+Each row is one time step. Each column is one sine or cosine of a different frequency.
+
+## The Transformer block
+
+```{mermaid}
+%%| echo: false
+%%{init: {'flowchart': {'htmlLabels': false}, 'themeVariables': {'fontFamily': 'Helvetica, Arial, sans-serif'}}}%%
+flowchart TD
+    I[Input series: windows or patches] --> E[Embed + add positional encoding]
+    E --> A[Multi-head causal self-attention, then add + normalize]
+    E -. residual connection .-> A
+    A --> F[Feed-forward network on each step, then add + normalize]
+    A -. residual connection .-> F
+    F --> O[Repeat for N blocks, then output layer: forecast]
+```
+
+## The Transformer block: the parts
+
+- **Multi-head:** run several attention heads with different $W_Q,W_K,W_V$ in parallel (each can focus on a different pattern, e.g. recent steps, same weekday last week) and concatenate.
+- **Residual connections and normalization** make deep stacks trainable.
+- **Cost:** the score table is $L\times L$, so memory and time grow like $L^2$ in the sequence length.
+- The same block, stacked, is the basis of language models, and has been adapted to forecasting.
+
+## Transformers for time series: what to know
+
+- Applying language-model machinery directly to time points can work poorly: a single time step carries little information (unlike a word), and attention over individual points can blur temporal order.
+- A well-known study, Zeng et al. (2023), reported that very simple linear models outperformed several Transformer forecasters on standard benchmarks. The lesson: **compare to simple baselines**.
+- A common remedy, **patching** (for example PatchTST): group consecutive points into patches and treat each patch as a token, so attention works on meaningful chunks and the sequence is shorter.
+- Strengths in practice: long inputs, many series trained together, multivariate dependence.
+- Costs: data hunger, tuning, compute, and less interpretability than ETS or ARIMA.
+
+## Attention vs the models you know
+
+| Model | How weights on the past are determined |
+|---|---|
+| AR($p$) | Fixed coefficients on $p$ lags, same for every forecast |
+| Exponential smoothing | Fixed geometric decay on the past |
+| Trees on lags | Rules on a chosen set of lag features |
+| RNN / LSTM | Compressed into a running state, gated by learned rules |
+| Attention | Weights recomputed from the content of the current context |
+
+AR and exponential smoothing are special cases of "weighted average of the past" with weights frozen in advance. Attention lets the weights respond.
+
+# 2.13 Putting it together
+
+## Failure modes at a glance
+
+| Method | Typical failure | Warning sign | Remedy |
+|---|---|---|---|
+| Trees on lags | Cannot extrapolate trends | Forecasts flatten at the training maximum | Difference the target; hybrid with a trend model |
+| Trees on lags | Leakage via rolling features or shuffled CV | Test error much better than seems plausible | Strict time ordering; compute features from the past only |
+| Boosting | Overfitting with many rounds | Training error falls, validation error rises | Early stopping on a later validation period; smaller `eta` |
+| Random forest | Optimistic OOB error | OOB much better than time-ordered CV | Time-ordered validation |
+| Global models | Series on different scales; leakage across series | Large series dominate; surprisingly good test scores | Normalize; cut all series at the same date |
+| Attention / Transformers | Overfit small data; losing temporal order | Linear or seasonal-naive baselines are competitive | Baselines first; patching; more data |
+| Everything | One split, one seed | Rankings change when you re-run | Rolling origins, several seeds, report spread |
+
+## A practical workflow
+
+1. Plot the data. Identify trend, seasonality, calendar effects, number of series.
+2. Fit simple baselines (seasonal naive, ETS, ARIMA). Record their time-ordered holdout errors.
+3. Build lag, rolling and calendar features using only the past. Check for leakage.
+4. Try a random forest as a robust first ML model; then boosting with early stopping on a later validation period.
+5. Handle trends explicitly (differencing or a hybrid).
+6. If you have many related series, try a global model with normalization and descriptors.
+7. Compare against the baselines on **held-out, time-ordered** data, over more than one origin.
+8. Add uncertainty (quantile model or conformal), and check coverage.
+9. Consider attention-based or other deep models only when you have lots of data and a reason, and benchmark them against steps 2 to 6.
+
+## Results on these slides, in one place
+
+- **Electricity (one series, calendar and temperature):** XGBoost beat plain ARIMA, but ETS and a lag regression with the same calendar information were better; tuning did not help on the test year.
+- **Trending series:** tree models on levels failed badly; differencing the target repaired most of the damage, but classical models extrapolated best.
+- **Multi-step (sunspots):** neither direct nor recursive won consistently; the winner changed by horizon.
+- **Tourism (304 series):** global beat local ML, but local ETS was best.
+- **Attention-style toy (sunspots):** selective lookback beat a fixed-weight AR(9) on this series.
+
+Take-away: machine learning methods are strong additions to the toolbox, not replacements for it.
+
+## Self-check: Part 2
+
+1. Why is shuffled $k$-fold CV inappropriate for time series? What replaces it?
+2. A teammate computes a 7-day rolling mean of demand including today and uses it as a feature. What is wrong?
+3. Explain why a random forest cannot predict above the highest value in its training data. Name two fixes.
+4. In boosting with squared error, what does each new tree fit?
+5. What happens to a forest's variance as you add trees? As you lower `mtry`?
+6. When would you prefer a direct to a recursive multi-step strategy?
+7. Why normalize each series before training a global model?
+8. What do the $Q$, $K$, $V$ matrices represent, and what does the $\sqrt{d_k}$ do?
+9. Why does forecasting need a causal mask, and what does positional encoding add?
+10. What did our tourism and electricity results show about ML versus classical methods?
+
+## Answers: Part 2
+
+1. It trains on the future of test rows and splits near-duplicate neighbouring rows across folds. Use rolling-origin (expanding window) validation with training always before testing.
+2. The window includes the target day, so the feature contains the answer. Compute the mean from lagged values only, then roll.
+3. Each leaf predicts an average of training targets, so predictions lie within the training range. Fixes: model differences or growth rates; fit a trend first and use trees on the residuals (also linear trees, or normalization).
+4. The residuals of the current ensemble (the negative gradient of squared error), scaled by the learning rate when added.
+5. Variance falls toward the floor $\rho\sigma^2$ as trees are added. Lowering `mtry` lowers the correlation $\rho$ between trees, which lowers that floor, at the cost of weaker individual trees.
+6. When errors compounding through recursion are a concern, or when later-horizon forecasts would need unavailable future inputs; direct trains each horizon on its own target.
+7. So that large and small series are on a common scale and the loss is not dominated by large series; shapes become shareable.
+8. Queries ask "what am I looking for", keys say "what do I contain", values hold the content to be mixed. $\sqrt{d_k}$ keeps the dot products from growing with dimension, which would push the softmax into saturation.
+9. Without the mask a step could attend to the future (leakage). Attention is order-blind, so positional encoding supplies time order.
+10. ML methods are competitive and shine with many predictors or many series, but are not automatically better; well-specified classical models (ETS on tourism, trend models) remained very strong, and results depend on the data.
+
+## Further reading
+
+- Hyndman and Athanasopoulos, *Forecasting: Principles and Practice* (3rd ed.), for the classical baselines used here.
+- Hastie, Tibshirani and Friedman, *The Elements of Statistical Learning*: trees, bagging, random forests, boosting.
+- Breiman (2001), "Random Forests"; Chen and Guestrin (2016), "XGBoost: A Scalable Tree Boosting System".
+- Vaswani et al. (2017), "Attention Is All You Need".
+- Zeng et al. (2023), "Are Transformers Effective for Time Series Forecasting?"; Nie et al. (2023), PatchTST.
+- Makridakis et al. on the M5 competition (gradient boosting and global models featured prominently in the top entries).
