@@ -1,4 +1,4 @@
-# Homework 5
+# Homework 5 - Due 11/18/2026
 
 Please complete the following and upload **reproducible code** to the [Github HW5 submissions](https://github.com/jlivsey/UB-fall26-time-series/tree/main/hw/hw5/submissions) repository.
 
