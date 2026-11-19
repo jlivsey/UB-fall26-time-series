@@ -39,3 +39,9 @@ slides/12-ML/12b-ML-applications.qmd
 /syllabus
 /slides/13-spectral
 references/tsa3.pdf
+
+# final presentations: keep students' rendered slides, never the downloaded data
+!/final/assigned-problem/*/*.html
+/final/assigned-problem/EF/guitarset/
+/slides/14-classification-clustering/14-classification-clustering_cache
+/slides/14-classification-clustering/14-classification-clustering_files
