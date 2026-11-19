@@ -1,0 +1,1376 @@
+---
+title: "Homework 5"
+subtitle: "UB Time Series -- Fall 2026"
+author: "Emily Fagerstrom"
+date: today
+format:
+  html:
+    embed-resources: true
+    toc: true
+    toc-depth: 3
+    code-fold: false
+    fig-width: 8
+    fig-height: 4.5
+    theme: cosmo
+  gfm:
+    toc: true
+execute:
+  echo: true
+  warning: false
+  message: false
+  cache: true
+---
+
+```{r, echo=FALSE}
+library(fpp3)
+
+dir <- tempfile(); dir.create(dir)
+zipf <- file.path(dir, "bike.zip")
+download.file("https://archive.ics.uci.edu/static/public/275/bike+sharing+dataset.zip",
+              zipf, method = "curl", quiet = TRUE)
+unzip(zipf, exdir = dir)
+
+bike <- readr::read_csv(file.path(dir, "day.csv"), show_col_types = FALSE) |>
+  transmute(Date = as.Date(dteday),
+            Rentals = cnt,
+            Temp = temp * 41,          # the file stores these divided by their maximum
+            Hum = hum * 100,
+            Wind = windspeed * 67,
+            Weather = weathersit,
+            Holiday = holiday,
+            Workday = workingday) |>
+  as_tsibble(index = Date)
+
+```
+
+
+## Part 1: Make a plan
+
+1. Plot `Rentals` and the weather variables. Describe the trend, the weekly pattern, the yearly seasonality, and any unusual days.
+1. Before fitting anything, answer the following in a few sentences each. 
+   * **What is known at forecast time?** At the end of day $t$, which values of `Rentals` and of the weather are available for forecasting day $t+3$? Which calendar information about day $t+3$ is known in advance?
+   * **How will you score the forecasts?** RMSE, MAE, or a score aimed at the operations goal (for example, error on high-demand days only, or a heavier penalty for under-forecasting than for over-forecasting). Justify your choice.
+   * **What validation period and training window will you use** to choose model settings? Justify the length and timing of your validation block(s), and your choice of an expanding or rolling window.
+   * **What counts as a good forecast?** Choose one or more benchmark forecasts that use only information available three days ahead. Say how much better than the benchmark a model must be to be worth using.
+
+
+
+```{r}
+library(ranger)
+library(xgboost)
+library(tidyverse)
+library(zoo)
+
+
+glimpse(bike)
+
+bike |>
+  autoplot(Rentals) +
+  labs(
+    title = "Daily Capital Bikeshare Rentals (2011–2012)",
+    x = "Date",
+    y = "Daily Rentals"
+  )
+
+
+bike |>
+  pivot_longer(
+    c(Temp, Hum, Wind),
+    names_to = "Variable",
+    values_to = "Value"
+  ) |>
+  ggplot(aes(x = Date, y = Value)) +
+  geom_line() +
+  facet_wrap(~Variable, scales = "free_y", ncol = 1) +
+  labs(
+    title = "Daily Weather Variables (2011–2012)",
+    x = "Date",
+    y = NULL
+  )
+
+
+bike |>
+  ggplot(aes(x = Date, y = Weather)) +
+  geom_point(alpha = 0.5) +
+  scale_y_continuous(breaks = 1:4) +
+  labs(
+    title = "Daily Weather Categories",
+    x = "Date",
+    y = "Weather Category"
+  )
+
+
+bike_data <- bike %>%
+  mutate(
+    day_type = case_when(
+      Holiday == 1 ~ "Holiday",
+      Workday == 1 ~ "Workday",
+      TRUE ~ "Other"
+    )
+  )
+
+ggplot(bike_data, aes(x = Date, y = Rentals, color = day_type)) +
+  geom_point(alpha = 0.7, size = 1) +
+  scale_color_manual(
+    values = c(
+      "Holiday" = "red",
+      "Workday" = "blue",
+      "Other" = "green"
+    )
+  ) +
+  labs(
+    title = "Bike Rentals Over Time",
+    x = "Date",
+    y = "Number of Rentals",
+    color = "Day Type"
+  ) +
+  theme_minimal()
+
+
+ggplot(bike_data, aes(x = Date, y = Rentals, color = as.factor(Workday))) +
+  geom_point(alpha = 0.7, size = 1) +
+  labs(
+    title = "Bike Rentals Over Time",
+    x = "Date",
+    y = "Number of Rentals",
+    color = "Work Day y/n"
+  ) +
+  theme_minimal()
+
+
+```
+
+
+Bike Rentals:
+Low in the winter, then high in the summer (peaking around July).  Also, 2012 peaks much higher in the summer than 2011.  This is only two years worth of data, so I don't know if trend is the right word, but it seems like increasing trend (higher in 2012 than 2011), with the seasonal effect (higher in the summer, like linear + sinusoidal).  Moreover, since winters still stay near 0, you get increasing variance (like the air passengers) and might want to do a log.
+
+Not sure about weekly patterns, so here's some more plots:
+
+```{r}
+
+bike_data <- bike %>%
+  mutate(
+    day_of_week = weekdays(Date)
+  )
+
+ggplot(bike_data, aes(x = Date, y = Rentals, color = day_of_week)) +
+  geom_point(alpha = 0.7, size = 2) +
+  labs(
+    title = "Bike Rentals by Day of the Week",
+    x = "Date",
+    y = "Rentals",
+    color = "Day"
+  ) +
+  theme_minimal()
+
+
+bike_data <- bike_data %>%
+  mutate(
+    day_of_week = factor(
+      weekdays(Date),
+      levels = c("Monday", "Tuesday", "Wednesday",
+                 "Thursday", "Friday", "Saturday", "Sunday")
+    )
+  )
+
+ggplot(bike_data, aes(x = day_of_week, y = Rentals, fill = day_of_week)) +
+  geom_boxplot() +
+  labs(
+    title = "Distribution of Bike Rentals by Day of the Week",
+    x = "Day of the Week",
+    y = "Number of Rentals"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+```
+
+
+Ok, just literally zooming in on a month or 3 to see if the weekly pattern is more obvious:
+
+
+```{r}
+
+ggplot(
+  bike_data %>%
+    filter(Date >= as.Date("2012-07-01"),
+           Date <= as.Date("2012-07-31")),
+  aes(x = Date, y = Rentals)
+) +
+  geom_line(color = "steelblue") +
+  geom_point(size = 2) +
+  scale_x_date(date_breaks = "1 day",
+               date_labels = "%a %d") +
+  labs(
+    title = "Daily Bike Rentals - July 2012",
+    x = "Date",
+    y = "Rentals"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+
+ggplot(
+  bike_data %>%
+    filter(Date >= as.Date("2011-09-01"),
+           Date <= as.Date("2011-09-30")),
+  aes(x = Date, y = Rentals)
+) +
+  geom_line(color = "steelblue") +
+  geom_point(size = 2) +
+  scale_x_date(date_breaks = "1 day",
+               date_labels = "%a %d") +
+  labs(
+    title = "Daily Bike Rentals - September 2011",
+    x = "Date",
+    y = "Rentals"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+
+```
+
+
+As for weekly patterns... looks like some of the highest days were Saturdays and Sundays in September 2011.  But in July 2012, Saturday and Sunday were sometimes (but not always) lower days.  Perhaps the bikes caught on with commuters by 2012?  I'm not too sure about a weekly pattern.
+
+
+```{r}
+
+ggplot(
+  bike_data %>%
+    filter(Date >= as.Date("2011-03-01"),
+           Date <= as.Date("2011-04-30")),
+  aes(x = Date, y = Rentals)
+) +
+  geom_line(color = "steelblue") +
+  geom_point(size = 2) +
+  scale_x_date(date_breaks = "1 day",
+               date_labels = "%a %d") +
+  labs(
+    title = "Daily Bike Rentals - March, April 2011",
+    x = "Date",
+    y = "Rentals"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+
+Yeah I'm definitely not sure about weekly.
+
+```{r}
+
+ggplot(bike_data, aes(x = Date, y = Rentals, color = as.factor(Weather))) +
+  geom_point(alpha = 0.7, size = 2) +
+  labs(
+    title = "Bike Rentals by Weather",
+    x = "Date",
+    y = "Rentals",
+    color = "Weather Type"
+  ) +
+  theme_minimal()
+
+
+```
+
+I'm not quite sure what 1, 2, and 3 are (represent).  But 3s are very bad for Bike Rentals, and 1s are a bit better than 2s for bike rentals.
+
+The Kaggle page says:
+
+weathersit: (extracted from Freemeteo)
+
+1: Clear, Few clouds, Partly cloudy, Partly cloudy
+
+2: Mist + Cloudy, Mist + Broken clouds, Mist + Few clouds, Mist
+
+3: Light Snow, Light Rain + Thunderstorm + Scattered clouds, Light Rain + Scattered clouds
+
+4: Heavy Rain + Ice Pallets + Thunderstorm + Mist, Snow + Fog
+
+So stormy days have low bike rentals.
+
+```{r}
+
+bike |>
+  ggplot(aes(x = Temp, y = Rentals)) +
+  geom_point(alpha = 0.5) +
+  scale_y_continuous(breaks = 1:4) +
+  labs(
+    title = "Temp effect on Rentals"
+  )
+
+bike |>
+  ggplot(aes(x = Hum, y = Rentals)) +
+  geom_point(alpha = 0.5) +
+  scale_y_continuous(breaks = 1:4) +
+  labs(
+    title = "Humidity effect on Rentals"
+  )
+
+bike |>
+  ggplot(aes(x = Wind, y = Rentals)) +
+  geom_point(alpha = 0.5) +
+  scale_y_continuous(breaks = 1:4) +
+  labs(
+    title = "Wind effect on Rentals"
+  )
+```
+
+
+Bit of a quadratic effect with temperature.  Low temps associated with low bike rentals.  Peak amounts of rentals around temperature of 25; decreasing past that.  (Makes sense).  Nothing immediately super obvious about humidity or wind (at least not without interaction term).
+
+[Coming back here to add in: Never threw in a (temp-25)^2 term, and kind of wish I had. meh]
+
+
+**What is known at forecast time?**
+
+At the end of day $t$, I think Rentals data is known immediately (as I understand it, you tap credit card on the bikes, everything is digital/immediate/in one system).  So there is no reporting lag.  You know the Rentals data up through day $t$.  You know the calendar information (Date, Workday, Holiday) out to $t+3$ (and beyond).
+
+For weather, my very quick google AI answer says: "Weather forecasts for specific daily details—such as exact temperatures, wind speeds and directions, and humidity—are reliable out to 5 to 7 days."  And: "1 to 3 Days: High reliability (up to 90%–95% accuracy). Specific details like high/low temperatures, exact wind direction, and relative humidity changes are dependable."  So... I guess while the weather isn't exactly known, an available forecasted predictor variable can be used for the weather variables.
+
+But in this data set we don't have the before-it-was-known weather forecasts.  So. I either use genuine temperature only up to day $t$ to forecast day $t+3$.  (Or maybe I could weirdly introduce some sort of synthetic temperature variable to mimic a 90-95% accurate temperature variable for days $t+1$, $t+2$, $t+3$. Which... nope.  but seems like an interesting idea.)
+
+So, in the model, I guess I'm going to just say I only have temperature data through day $t$, but if weather prediction really is that accurate, I do wonder how bad the assumption is that I could actually use weather data out to $t+3$.  (Maybe prediction was less accurate in 2011.)
+
+[ok... I now see that is covered later...]
+
+**How will you score the forecasts?**
+
+Some scattered thoughts: Perhaps having an extra bike or two available on peak days that then sits idle most of the year, it might be fine to "miss out on the sale" on the peak day.  (Actually: Do they sit idle? They must pack up bikes and store them.  There's no way they have the full fleet out even in the winter?  Or maybe they do.  I know Buffalo packs all of them up entirely for the winter; DC probably has a reduced fleet in the winter.)  On the other hand, if a bike is not available to a commuter when they want it, they may decide that commuting by bike is unreliable and that person may be lost as a potential daily bike commuter.  Now that I think about it, I'm not quite sure the use case for wanting to predict a daily number (as opposed to an overall seasonal max, say). It's not like a bunch of bikes get packed up each night and put back out in the morning.  Although I suppose you can decide which days you might grab a bunch of bikes for maintenance?  For that matter... I suppose we don't really know the size of the fleet. So perhaps some of these data points represent days when all the bikes were in use. So the data point represents the size of the fleet available at the time, instead of the actual demand.
+
+(Also, if there are too many bikes out, relative to the number of docking stations, that can also suck.  I rode several miles out of my way to finally find a docking station with an open parking spot in Boston once.)
+
+Ok all of which is to say, I don't know if there is a particular reason to highly penalize an undercount or an overcount. So, ... RMSE I guess?  I don't have an argument for anything else.
+
+
+**What validation period and training window will you use**
+
+Oof.  There's only two years of data with strong looking seasonality... This doesn't feel like enough data. Knee jerk reaction: I should use an expanding window. So at any given hypothetical point, use all the data that was available at that point. ON THE OTHER HAND: I do wonder about the bikes catching on with commuters.  Google says that bike sharing came to DC in 2008, but the "larger current regional network" launched in September 2010.  So it seems at least plausible that in 2011, bikesharing wasn't big with commuters and in 2012 maybe it was.  (So throwing out "old" data might be good).  In any case, I'm going to use an expanding window. But I wonder if that is actually the right move.
+
+For a validation window, idk. 3 months.  Seems... medium.
+
+So:
+
+Train: 01/11 - 12/11; Validate 01/12 - 03/12
+
+Train: 01/11 - 03/12; Validate 04/12 - 06/12
+
+Train: 01/11 - 06/12; Validate 07/12 - 09/12
+
+Train: 01/11 - 09/12; Test 10/12 - 12/12 (this is bad; only testing on some fall months?)
+
+WELL! That's what I'm going to do.  But I think testing on October through December will be kind of bad.
+
+
+**What counts as a good forecast?**
+
+Benchmark forecasts: same day last week. (Temperature should be roughly the same; whatever weekly pattern exists should still be there; eg if commuter adoption changes over time, it shouldn't matter much in a week).  Also: rolling 7-day average.  (Same idea: temperature should be roughly the same; crazy weather events will be a bit smoothed out.)
+
+I'm actually guessing that those benchmarks will be "pretty good." (whatever that means). So, completely arbitrarily, I will say a forecast is good if it is 5% better than those benchmarks.
+
+More concretely: I will say a forecast is good if the RMSE if 5% lower than the same-day-last-week benchmark forecast.
+
+
+## Part 2: Build the feature table
+
+1. Build a table with one row per day and `Rentals` as the target. Include lags of the target, at least one rolling statistic of the target, calendar features, and weather features.
+1. For each feature, state which day's data it uses and why it is known three days ahead.
+1. Make the train/test split, report both sample sizes, and compute your benchmark forecasts on the validation and test periods.
+
+```{r}
+
+library(lubridate)
+
+bike_model <- bike %>%
+  arrange(Date) %>%
+  mutate(
+    # Rental history
+    Rentals_lag3  = lag(Rentals, 3),  #will be most recently known
+    Rentals_lag7  = lag(Rentals, 7),  #same day of the week
+
+    # Seven-day rolling average, ending at t
+    Rentals_avg7 = lag(
+      zoo::rollmean(Rentals, k = 7,
+                    fill = NA, align = "right"), #as I understand it, this is avg of t-9 thru t-3
+      3
+    ),
+
+    # Observed weather, available through t (only using most recent for predict)
+    Temp_lag3 = lag(Temp, 3),
+
+    # Calendar information for the forecast date
+    Day_of_week = wday(Date, label = TRUE),
+    Month = month(Date)
+  ) %>%
+  drop_na()
+
+```
+
+
+
+
+```{r}
+
+folds <- tibble(
+  fold = 1:3,
+
+  train_start = as.Date(c(
+    "2011-01-01",
+    "2011-01-01",
+    "2011-01-01"
+  )),
+
+  train_end = as.Date(c(
+    "2011-12-31",
+    "2012-03-31",
+    "2012-06-30"
+  )),
+
+  valid_start = as.Date(c(
+    "2012-01-01",
+    "2012-04-01",
+    "2012-07-01"
+  )),
+
+  valid_end = as.Date(c(
+    "2012-03-31",
+    "2012-06-30",
+    "2012-09-30"
+  ))
+)
+
+folds
+
+```
+
+
+```{r}
+test_data <- bike_model %>%
+  filter(
+    Date >= as.Date("2012-10-01"),
+    Date <= as.Date("2012-12-31")
+  )
+
+
+validation_sets <- lapply(1:3, function(i) {
+
+  train <- bike_model %>%
+    filter(
+      Date >= folds$train_start[i],
+      Date <= folds$train_end[i]
+    )
+
+  valid <- bike_model %>%
+    filter(
+      Date >= folds$valid_start[i],
+      Date <= folds$valid_end[i]
+    )
+
+  list(
+    train = train,
+    valid = valid
+  )
+})
+
+
+# Fold 1
+train1 <- validation_sets[[1]]$train
+valid1 <- validation_sets[[1]]$valid
+
+# Fold 2
+train2 <- validation_sets[[2]]$train
+valid2 <- validation_sets[[2]]$valid
+
+# Fold 3
+train3 <- validation_sets[[3]]$train
+valid3 <- validation_sets[[3]]$valid
+
+for (i in 1:3) {
+
+  cat("\nFold", i, "\n")
+
+  cat("Training:",
+      nrow(validation_sets[[i]]$train), "\n")
+
+  cat("Validation:",
+      nrow(validation_sets[[i]]$valid), "\n")
+}
+
+cat("\nTest:", nrow(test_data), "\n")
+
+```
+
+
+
+```{r}
+
+model_formula <- Rentals ~
+  Rentals_lag3 +
+  Rentals_lag7 +
+  Rentals_avg7 +
+  Temp_lag3 +
+  Day_of_week +
+  Month +
+  Workday +
+  Holiday
+
+rmse <- function(actual, predicted) {
+  sqrt(mean((actual - predicted)^2))
+}
+
+###################################
+
+
+validation_results <- data.frame()
+
+for (i in 1:3) {
+
+  train <- validation_sets[[i]]$train
+  valid <- validation_sets[[i]]$valid
+
+  # Fit model
+  model <- lm(model_formula, data = train)
+
+  # Predict
+  predictions <- predict(model, newdata = valid)
+
+  # Calculate RMSE
+  fold_rmse <- rmse(valid$Rentals, predictions)
+
+  # Save results
+  validation_results <- rbind(
+    validation_results,
+    data.frame(
+      Fold = i,
+      Training_n = nrow(train),
+      Validation_n = nrow(valid),
+      RMSE = fold_rmse
+    )
+  )
+}
+
+validation_results
+
+###################################
+
+validation_predictions <- data.frame()
+
+for (i in 1:3) {
+
+  train <- validation_sets[[i]]$train
+  valid <- validation_sets[[i]]$valid
+
+  model <- lm(model_formula, data = train)
+
+  predictions <- predict(model, newdata = valid)
+
+  validation_predictions <- rbind(
+    validation_predictions,
+    data.frame(
+      Date = valid$Date,
+      Actual = valid$Rentals,
+      Predicted = predictions,
+      Fold = i
+    )
+  )
+}
+
+overall_validation_rmse <- rmse(
+  validation_predictions$Actual,
+  validation_predictions$Predicted
+)
+
+overall_validation_rmse
+
+
+###################################
+
+
+final_train <- bike_model %>%
+  filter(Date < as.Date("2012-10-01"))
+
+final_model <- lm(
+  model_formula,
+  data = final_train
+)
+
+test_predictions <- predict(
+  final_model,
+  newdata = test_data
+)
+
+test_rmse <- rmse(
+  test_data$Rentals,
+  test_predictions
+)
+
+test_rmse
+```
+
+seems terrible (relative to the previous ones)
+
+
+```{r}
+test_results <- data.frame(
+  Date = test_data$Date,
+  Actual = test_data$Rentals,
+  Predicted = test_predictions
+)
+
+ggplot(test_results, aes(x = Date)) +
+  geom_line(aes(y = Actual, color = "Actual")) +
+  geom_line(aes(y = Predicted, color = "Predicted")) +
+  scale_color_manual(
+    values = c(
+      "Actual" = "black",
+      "Predicted" = "red"
+    )
+  ) +
+  labs(
+    title = "Actual vs. Predicted Bike Rentals",
+    x = "Date",
+    y = "Rentals",
+    color = ""
+  ) +
+  theme_minimal()
+
+
+```
+
+
+Comparison to benchmarks:
+
+```{r}
+
+rmse <- function(actual, predicted) {
+  sqrt(mean((actual - predicted)^2, na.rm = TRUE))
+}
+
+
+bike_model %>%
+  as_tibble() %>%
+  filter(Date >= "2012-01-01", Date <= "2012-12-31") %>%
+  mutate(
+    fold = case_when(
+      Date <= "2012-03-31" ~ 1,
+      Date <= "2012-06-30" ~ 2,
+      Date <= "2012-09-30" ~ 3,
+      TRUE ~ 4
+    )
+  ) %>%
+  group_by(fold) %>%
+  summarise(
+    n = n(),
+    RMSE_last_week = rmse(Rentals, Rentals_lag7),
+    RMSE_avg7 = rmse(Rentals, Rentals_avg7)
+  )
+
+```
+
+
+I said beforehand that I'd compare to the last week's number.  I probably should have said I'd compare it to min(last week, rolling average).  In any case, the model was, for the most part, about the same as the rolling average.  Both were better than just taking last week's number.  And it seems like July-Aug is the easiest time period to predict.  TECHNICALLY, I guess the model did beat same-day-last-week, on all folds (and the testing), by at least 5%. But I'm moving the goal posts and it isn't very impressive when stacked against the rolling average.
+
+
+## Part 3: Random forest
+1. Fit a random forest with `ranger` using the default settings.
+1. Fit at least one other setting, changing at least one of `mtry`, `min.node.size`, `max.depth` or `num.trees`. Choose between your settings on your validation period, using your score from Part 1. Show the comparison in a table.
+1. Refit the chosen setting on all of the training data and score it on the test period. Also report its out-of-bag (OOB) error. Is it close to your validation error? Explain why or why not.
+1. Make a permutation importance plot. Which features matter most?
+
+
+
+```{r}
+
+library(ranger)
+
+set.seed(123)
+
+
+rf_model <- ranger(
+  formula = model_formula,
+  data = bike_model %>%
+    filter(Date <= "2011-12-31")
+)
+
+rf_model
+
+
+#Default settings on Fold 1
+rf_default1 <- ranger(model_formula, data = train1, seed = 123)
+pred_default1 <- predict(rf_default1, data = valid1)$predictions
+rmse_default1 <- rmse(valid1$Rentals, pred_default1)
+
+#should be a loop or apply, :(
+rf_default2 <- ranger(model_formula, data = train2, seed = 456)
+pred_default2 <- predict(rf_default2, data = valid2)$predictions
+rmse_default2 <- rmse(valid2$Rentals, pred_default2)
+
+rf_default3 <- ranger(model_formula, data = train3, seed = 789)
+pred_default3 <- predict(rf_default3, data = valid3)$predictions
+rmse_default3 <- rmse(valid3$Rentals, pred_default3)
+
+
+```
+
+
+ok. I think I'd like to mess with mty.  I think it should be pretty small, since Rentals_lag3, Rentals_lag7, Rentals_avg7 seem like they might be pretty similar.  (So basically, trying to avoid all of them, sometimes, via a small mty, seems like it might introduce some better tree-combos)
+
+
+Some non-default options:
+
+```{r}
+
+rf_model <- ranger(
+  formula = model_formula,
+  data = bike_model %>%
+    filter(Date <= "2011-12-31"),
+  importance="impurity"
+)
+
+sort(rf_model$variable.importance, decreasing = TRUE)
+
+```
+
+
+```{r}
+
+library(purrr)
+
+mtry_values <- 1:8
+
+mtry_results <- map_dfr(mtry_values, function(m) {
+  fold_preds <- map_dfr(seq_along(validation_sets), function(i) {
+    train_df <- validation_sets[[i]]$train
+    valid_df <- validation_sets[[i]]$valid
+
+    fit <- ranger(
+      formula = model_formula,
+      data = train_df,
+      mtry = m,
+      num.trees = 500,
+      seed = 246 + i
+    )
+
+    tibble(
+      fold = i,
+      Actual = valid_df$Rentals,
+      Predicted = predict(fit, data = valid_df)$predictions
+    )
+  })
+
+  # Overall RMSE across all validation rows (Folds 1–3)
+  overall_val_rmse <- rmse(fold_preds$Actual, fold_preds$Predicted)
+
+  tibble(
+    mtry = m,
+    Overall_Val_RMSE = overall_val_rmse
+  )
+})
+
+knitr::kable(
+  mtry_results,
+  digits = 2,
+  caption = "Validation RMSE by mtry across Folds 1–3"
+)
+
+best_mtry <- mtry_results |>
+  slice_min(Overall_Val_RMSE, n = 1) |>
+  pull(mtry)
+
+best_mtry
+
+
+```
+
+
+The best mtry came out as 7, which, ... not what I expected.  It's only a little better than the default.
+
+
+
+
+```{r}
+
+# 1. Refit on all training data prior to the test period (2011-01-01 through 2012-09-30)
+final_train <- bike_model |>
+  filter(Date < as.Date("2012-10-01"))
+
+final_rf <- ranger(
+  formula = model_formula,
+  data = final_train,
+  mtry = best_mtry,
+  num.trees = 500,
+  importance = "permutation",
+  seed = 456
+)
+
+# 2. Out-of-bag (OOB) RMSE vs. Test RMSE
+# ranger reports prediction.error as MSE for regression
+oob_rmse <- sqrt(final_rf$prediction.error)
+
+test_preds_rf <- predict(final_rf, data = test_data)$predictions
+test_rmse_rf <- rmse(test_data$Rentals, test_preds_rf)
+
+tibble(
+  Metric = c("OOB RMSE (Final Train: Jan 2011 - Sep 2012)", "Test RMSE (Oct 2012 - Dec 2012)"),
+  RMSE = c(oob_rmse, test_rmse_rf)
+) |>
+  knitr::kable(digits = 2, caption = "Out-of-Bag vs. Test Set RMSE")
+
+# 3. Permutation variable importance plot
+imp_df <- enframe(final_rf$variable.importance, name = "Feature", value = "Importance") |>
+  arrange(Importance) |>
+  mutate(Feature = factor(Feature, levels = Feature))
+
+ggplot(imp_df, aes(x = Feature, y = Importance)) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  labs(
+    title = "Permutation Variable Importance (Final Random Forest)",
+    subtitle = paste0("mtry = ", best_mtry, ", 500 trees"),
+    x = NULL,
+    y = "Increase in MSE When Permuted"
+  ) +
+  theme_minimal()
+
+
+```
+
+
+7-day rolling average rentals (t-9 thru t-3) ended up being the most important variable (as determined by permutation).  (So it makes sense that that benchmark wound up being pretty good).
+
+
+## Part 4: XGBoost
+
+1. Fit XGBoost (`xgb.train()` with `objective = "reg:squarederror"`) with a starting setting of your choice.
+1. Fit at least one other setting, changing at least one of `max_depth`, `eta`, `subsample` or `colsample_bytree`. For each setting, choose the number of rounds on your validation period. Show the settings, the chosen rounds and the validation score in a table.
+1. Refit the chosen setting on all of the training data and score it on the test period.
+
+
+
+```{r}
+
+library(xgboost)
+
+xs_xgb <- c("Rentals_lag3", "Rentals_lag7", "Rentals_avg7",
+            "Temp_lag3", "Day_of_week", "Month", "Workday", "Holiday")
+
+dtr1 <- xgb.DMatrix(
+  as.matrix(mutate(train1[, xs_xgb], Day_of_week = as.numeric(Day_of_week))),
+  label = train1$Rentals
+)
+
+dva1 <- xgb.DMatrix(
+  as.matrix(mutate(valid1[, xs_xgb], Day_of_week = as.numeric(Day_of_week))),
+  label = valid1$Rentals
+)
+
+xgb1 <- xgb.train(
+  params = list(
+    objective = "reg:squarederror",
+    max_depth = 3,
+    eta = 0.05,
+    seed = 123
+  ),
+  data = dtr1,
+  nrounds = 100,
+  verbose = 0
+)
+
+rmse(valid1$Rentals, predict(xgb1, dva1))
+
+```
+
+
+For the expanding window.  (Should I still be doing this?)
+
+```{r}
+
+xgb_val_results <- data.frame()
+xgb_val_preds <- data.frame()
+
+for (i in 1:3) {
+  train <- validation_sets[[i]]$train
+  valid <- validation_sets[[i]]$valid
+
+  dtrain <- xgb.DMatrix(
+    as.matrix(mutate(train[, xs_xgb], Day_of_week = as.numeric(Day_of_week))),
+    label = train$Rentals
+  )
+  dvalid <- xgb.DMatrix(
+    as.matrix(mutate(valid[, xs_xgb], Day_of_week = as.numeric(Day_of_week))),
+    label = valid$Rentals
+  )
+
+  model <- xgb.train(
+    params = list(
+      objective = "reg:squarederror",
+      max_depth = 3,
+      eta = 0.05,
+      seed = 123 + i
+    ),
+    data = dtrain,
+    nrounds = 100,
+    verbose = 0
+  )
+
+  preds <- predict(model, dvalid)
+  fold_rmse <- rmse(valid$Rentals, preds)
+
+  xgb_val_results <- rbind(
+    xgb_val_results,
+    data.frame(
+      Fold = i,
+      Training_n = nrow(train),
+      Validation_n = nrow(valid),
+      RMSE = fold_rmse
+    )
+  )
+
+  xgb_val_preds <- rbind(
+    xgb_val_preds,
+    data.frame(
+      Date = valid$Date,
+      Actual = valid$Rentals,
+      Predicted = preds,
+      Fold = i
+    )
+  )
+}
+
+xgb_val_results
+overall_xgb_val_rmse <- rmse(xgb_val_preds$Actual, xgb_val_preds$Predicted)
+overall_xgb_val_rmse
+
+
+```
+
+
+
+```{r}
+
+etas <- c(0.02, 0.05, 0.1, 0.2)
+max_rounds <- 400
+
+all_logs <- list()
+
+for (e in etas) {
+  fold_logs <- list()
+
+  for (i in 1:3) {
+    tr <- validation_sets[[i]]$train
+    va <- validation_sets[[i]]$valid
+
+    dtr <- xgb.DMatrix(
+      as.matrix(mutate(tr[, xs_xgb], Day_of_week = as.numeric(Day_of_week))),
+      label = tr$Rentals
+    )
+    dva <- xgb.DMatrix(
+      as.matrix(mutate(va[, xs_xgb], Day_of_week = as.numeric(Day_of_week))),
+      label = va$Rentals
+    )
+
+    curve_fit <- xgb.train(
+      params = list(
+        objective = "reg:squarederror",
+        eta = e,
+        max_depth = 3,
+        subsample = 0.8,
+        colsample_bytree = 0.8,
+        seed = 123 + i
+      ),
+      data = dtr,
+      nrounds = max_rounds,
+      evals = list(train = dtr, valid = dva),
+      verbose = 0
+    )
+
+    fold_logs[[i]] <- as_tibble(attributes(curve_fit)$evaluation_log) |>
+      mutate(eta = factor(e), fold = i, n_tr = nrow(tr), n_va = nrow(va))
+  }
+
+  # Pool squared error across Folds 1-3 at each boosting round (iter)
+  all_logs[[as.character(e)]] <- bind_rows(fold_logs) |>
+    group_by(eta, iter) |>
+    summarise(
+      train_rmse = sqrt(weighted.mean(train_rmse^2, w = n_tr)),
+      valid_rmse = sqrt(weighted.mean(valid_rmse^2, w = n_va)),
+      .groups = "drop"
+    )
+}
+
+curves_df <- bind_rows(all_logs)
+
+# 1. Table: chosen rounds and validation RMSE for each eta
+xgb_summary_table <- curves_df |>
+  group_by(eta) |>
+  slice_min(valid_rmse, n = 1, with_ties = FALSE) |>
+  ungroup() |>
+  mutate(max_depth = 3, subsample = 0.8, colsample_bytree = 0.8) |>
+  select(eta, max_depth, subsample, colsample_bytree,
+         chosen_rounds = iter, validation_rmse = valid_rmse)
+
+xgb_summary_table
+
+# 2. Professor-style learning curve plot (train vs. valid across boosting rounds)
+p_curve <- curves_df |>
+  pivot_longer(c(train_rmse, valid_rmse), names_to = "set", values_to = "rmse") |>
+  ggplot(aes(iter, rmse, colour = set)) +
+  geom_line() +
+  facet_wrap(~ eta, labeller = label_both) +
+  labs(x = "Boosting rounds", y = "RMSE", colour = NULL)
+
+p_curve
+
+
+
+```
+
+
+The validation curves for each of the following:
+
+
+eta is .02 -> global min around 150 or 200;
+
+eta is .05 -> global min is around 75;
+
+eta is .1 -> global min is around 50;
+
+eta is .2 -> global min is around n=20, 
+
+
+In all cases, the global min corresponds to *roughly* rmse of 1500; none of the eta's looks super good or bad (relative to one another).  I'm not sure how I should think about this.
+
+Technically eta=.02 wound up with the smallest global min (among these four choices), for the valid_rmse curve (rmse of 1469).  But it doesn't look that substantially different from the other choices of eta.
+
+```{r}
+
+# Combine all pre-test data (Jan 2011 - Sep 2012)
+final_train <- bind_rows(validation_sets[[3]]$train, validation_sets[[3]]$valid)
+
+# Build DMatrix objects using the chosen predictor columns
+d_final_train <- xgb.DMatrix(
+  as.matrix(mutate(final_train[, xs_xgb], Day_of_week = as.numeric(Day_of_week))),
+  label = final_train$Rentals
+)
+
+d_test <- xgb.DMatrix(
+  as.matrix(mutate(test_data[, xs_xgb], Day_of_week = as.numeric(Day_of_week))),
+  label = test_data$Rentals
+)
+
+# Refit using the winning validation settings and chosen number of rounds
+xgb_final <- xgb.train(
+  params = list(
+    objective = "reg:squarederror",
+    eta = 0.02,
+    max_depth = 3,
+    subsample = 0.8,
+    colsample_bytree = 0.8,
+    seed = 123
+  ),
+  data = d_final_train,
+  nrounds = 196,
+  verbose = 0
+)
+
+# Predict on test set and calculate test RMSE
+xgb_test_preds <- predict(xgb_final, d_test)
+xgb_test_rmse <- rmse(test_data$Rentals, xgb_test_preds)
+xgb_test_rmse
+
+
+```
+
+
+As earlier... testing on only data from October to December feels like it was maybe not ideal.  But comparing the xgboost model with the 7-day Rolling Average benchmark (changed the benchmark from what I said in problem 1), we have testing RMSE of 1680.702 for the xgboost and 1718 for the moving average (and 2047 for the "same day last week" benchmark).  So, judging on its testing rmse, xgboost did slightly better than moving average, but the rmse was not 5% less.
+
+
+## Part 5: Is it good enough?
+
+1. Make one table of test scores (your score from Part 1, plus RMSE and MAE) for each benchmark and each model setting you fit, with the score relative to your main benchmark.
+1. Plot the test period: the actual series, your main benchmark, and your best model's forecasts.
+1. Look at the **high-demand days** in the test period. Are your forecasts on those days too high or too low? Explain why, using how trees make predictions (see "Trees and trends" in 12-ML). Try one fix from those slides, for example predicting the change from a recent level and adding it back, and report whether it helps.
+1. **Weather on day $t+3$.** Refit your best model using the weather on the day being forecast. In practice that would come from a three-day weather forecast. How much does the test score change? Explain why this result is optimistic compared with using a real weather forecast.
+1. Write a short recommendation to the operations team: would you use your model, the benchmark, or neither? Support your answer with your test scores and your criterion from Part 1.
+
+
+My chosen score was RMSE.  My main benchmark I have decided is now the 7-day moving average.  I'm missing some of the test RMSEs (just have the validation ones), and all the MAEs.  So from the top...
+
+```{r, echo=FALSE}
+
+bike_model <- bike %>%
+  arrange(Date) %>%
+  mutate(
+    # Rental history known at end of day t (for forecasting t+3)
+    Rentals_lag3  = lag(Rentals, 3),
+    Rentals_lag7  = lag(Rentals, 7),
+
+    # Seven-day rolling average ending at t (lagged by 3 days -> t-9 through t-3)
+    Rentals_avg7 = lag(
+      zoo::rollmean(Rentals, k = 7, fill = NA, align = "right"),
+      3
+    ),
+
+    # Observed weather available through day t
+    Temp_lag3 = lag(Temp, 3),
+
+    # Calendar features for forecast date t+3
+    Day_of_week = wday(Date, label = TRUE),
+    Month = month(Date)
+  ) %>%
+  drop_na()
+
+folds <- tibble(
+  fold = 1:3,
+  train_start = as.Date(c("2011-01-01", "2011-01-01", "2011-01-01")),
+  train_end   = as.Date(c("2011-12-31", "2012-03-31", "2012-06-30")),
+  valid_start = as.Date(c("2012-01-01", "2012-04-01", "2012-07-01")),
+  valid_end   = as.Date(c("2012-03-31", "2012-06-30", "2012-09-30"))
+)
+
+test_data <- bike_model %>%
+  filter(
+    Date >= as.Date("2012-10-01"),
+    Date <= as.Date("2012-12-31")
+  )
+
+validation_sets <- lapply(1:3, function(i) {
+  list(
+    train = bike_model %>% filter(Date >= folds$train_start[i], Date <= folds$train_end[i]),
+    valid = bike_model %>% filter(Date >= folds$valid_start[i], Date <= folds$valid_end[i])
+  )
+})
+
+train1 <- validation_sets[[1]]$train
+valid1 <- validation_sets[[1]]$valid
+train2 <- validation_sets[[2]]$train
+valid2 <- validation_sets[[2]]$valid
+train3 <- validation_sets[[3]]$train
+valid3 <- validation_sets[[3]]$valid
+
+model_formula <- Rentals ~
+  Rentals_lag3 +
+  Rentals_lag7 +
+  Rentals_avg7 +
+  Temp_lag3 +
+  Day_of_week +
+  Month +
+  Workday +
+  Holiday
+
+rmse <- function(actual, predicted) {
+  sqrt(mean((actual - predicted)^2, na.rm = TRUE))
+}
+
+mae <- function(actual, predicted) {
+  mean(abs(actual - predicted), na.rm = TRUE)
+}
+
+# Store every benchmark and model's test predictions in one place
+test_preds <- list(
+  "7-day moving average (main benchmark)" = test_data$Rentals_avg7,
+  "Same day last week (Rentals_lag7)"     = test_data$Rentals_lag7
+)
+
+# Expanding-window validation for lm
+validation_results <- map_dfr(1:3, function(i) {
+  fit_i <- lm(model_formula, data = validation_sets[[i]]$train)
+  preds_i <- predict(fit_i, newdata = validation_sets[[i]]$valid)
+
+  tibble(
+    Fold = i,
+    Training_n = nrow(validation_sets[[i]]$train),
+    Validation_n = nrow(validation_sets[[i]]$valid),
+    RMSE = rmse(validation_sets[[i]]$valid$Rentals, preds_i),
+    MAE  = mae(validation_sets[[i]]$valid$Rentals, preds_i)
+  )
+})
+
+validation_results
+
+# Refit lm on all pre-October 2012 data and score test_data
+final_train <- bike_model %>%
+  filter(Date < as.Date("2012-10-01"))
+
+final_model <- lm(model_formula, data = final_train)
+test_predictions <- predict(final_model, newdata = test_data)
+test_rmse <- rmse(test_data$Rentals, test_predictions)
+test_mae  <- mae(test_data$Rentals, test_predictions)
+
+test_preds[["Linear regression (lm)"]] <- test_predictions
+c(RMSE = test_rmse, MAE = test_mae)
+
+
+#######################
+
+
+set.seed(123)
+
+rf_model <- ranger(
+  formula = model_formula,
+  data = bike_model %>%
+    filter(Date < as.Date("2012-10-01"))
+)
+
+preds_rf_test <- predict(rf_model, data = test_data)$predictions
+
+rmse(test_data$Rentals, preds_rf_test)
+mean(abs(test_data$Rentals - preds_rf_test))
+
+
+
+#################
+
+
+set.seed(456)
+
+rf_mtry7 <- ranger(
+  formula = model_formula,
+  data = bike_model %>%
+    filter(Date < as.Date("2012-10-01")),
+  mtry = 7
+)
+
+preds_rf_mtry7 <- predict(rf_mtry7, data = test_data)$predictions
+
+rmse(test_data$Rentals, preds_rf_mtry7)
+mean(abs(test_data$Rentals - preds_rf_mtry7))
+
+#######################
+
+
+tr_all <- bike_model %>%
+  filter(Date < as.Date("2012-10-01"))
+
+dtr <- xgb.DMatrix(
+  as.matrix(mutate(tr_all[, xs_xgb], Day_of_week = as.numeric(Day_of_week))),
+  label = tr_all$Rentals
+)
+
+dte <- xgb.DMatrix(
+  as.matrix(mutate(test_data[, xs_xgb], Day_of_week = as.numeric(Day_of_week))),
+  label = test_data$Rentals
+)
+
+xg_start <- xgb.train(
+  params = list(
+    objective = "reg:squarederror",
+    eta = 0.05,
+    max_depth = 3,
+    seed = 123
+  ),
+  data = dtr,
+  nrounds = 100,
+  verbose = 0
+)
+
+preds_xg_start <- predict(xg_start, dte)
+
+rmse(test_data$Rentals, preds_xg_start)
+mean(abs(test_data$Rentals - preds_xg_start))
+
+
+##############################
+
+
+xg_tuned <- xgb.train(
+  params = list(
+    objective = "reg:squarederror",
+    eta = 0.02,
+    max_depth = 3,
+    subsample = 0.8,
+    colsample_bytree = 0.8,
+    seed = 123
+  ),
+  data = dtr,
+  nrounds = 196,
+  verbose = 0
+)
+
+preds_xg_tuned <- predict(xg_tuned, dte)
+
+rmse(test_data$Rentals, preds_xg_tuned)
+mean(abs(test_data$Rentals - preds_xg_tuned))
+
+
+###################
+
+# 7-day moving average (main benchmark)
+rmse(test_data$Rentals, test_data$Rentals_avg7)
+mean(abs(test_data$Rentals - test_data$Rentals_avg7))
+
+# Same day last week
+rmse(test_data$Rentals, test_data$Rentals_lag7)
+mean(abs(test_data$Rentals - test_data$Rentals_lag7))
+```
+
+
+
+
+| Model / Benchmark | Score (RMSE) | MAE | Diff vs. 7-Day MA (`Score - 1718.3`) | Ratio vs. 7-Day MA (`Score / 1718.3`) |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **7-day moving average (main benchmark)** | `1718.3` | `1164.7` | `0.00` | `1.00` |
+| **Same day last week (`Rentals_lag7`)** | `2047.2` |  `1457.6` | `328.9` | `1.191` |
+| **Linear regression (`lm`)** | `1651.3` |  `1147.9` | `-67.0` | `0.961` |
+| **Random forest (`ranger`, default)** |  `1607.6` | `1168.5` | `-110.7` | `0.936` |
+| **Random forest (`ranger`, `mtry = 7`)** | `1837.1` | `1376.3` | `118.8` | `1.069` |
+| **XGBoost (starting: `eta = 0.05, rounds = 100`)** |  `1777.6` | `1350.2` | `59.3` | `1.035` |
+| **XGBoost (tuned: `eta = 0.02, rounds = 196`)** | `1680.7` | `1263.2` | `-37.6` | `0.978` |
+
+
+[How did I do worse on the mtry=7 vs the default? I thought I only changed the mtry, and that was optimized??? Different seed mattering??? This doesn't make sense to me.]
+
+
+```{r}
+
+library(tidyr)
+
+test_plot_df <- test_data |>
+  as_tibble() |>
+  mutate(
+    Actual = Rentals,
+    `7-day MA (benchmark)` = Rentals_avg7,
+    `Random Forest (default)` = preds_rf_test
+  ) |>
+  select(Date, Actual, `7-day MA (benchmark)`, `Random Forest (default)`) |>
+  pivot_longer(-Date, names_to = "Series", values_to = "Rentals")
+
+ggplot(test_plot_df, aes(x = Date, y = Rentals, colour = Series)) +
+  geom_line(linewidth = 0.8) +
+  scale_colour_manual(
+    values = c(
+      "Actual" = "black",
+      "7-day MA (benchmark)" = "#2a78d6",
+      "Random Forest (default)" = "#eb6834"
+    )
+  ) +
+  labs(
+    title = "Test Period Forecasts vs. Actual Rentals (Oct–Dec 2012)",
+    x = "Date",
+    y = "Daily Rentals",
+    colour = NULL
+  ) +
+  theme_minimal()
+
+
+```
+
+There are Some big spikes down which aren't caught by the model or the benchmarks.  This is likely due to stormy/rainy weather, which isn't in the model.  (3 days ago temperature doesn't capture storms.)
+
+
+
+
+
+
+
+
+
+## Notes
+
+* Set seeds so your results are reproducible: `seed = ` in `ranger()`, and `seed = ` inside the `params` list of `xgb.train()`.
+* Make sure each table and figure is among the visible outputs of your code and is clearly labeled.
+
